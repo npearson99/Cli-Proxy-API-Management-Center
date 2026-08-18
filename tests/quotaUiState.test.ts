@@ -51,6 +51,11 @@ describe('quota ui state', () => {
     expect(readQuotaUiState()).toEqual({ tab: 'codex', sortMode: 'soonest' });
   });
 
+  test('accepts the weekly sort mode', () => {
+    writeQuotaUiState({ sortMode: 'weekly' });
+    expect(readQuotaUiState()?.sortMode).toBe('weekly');
+  });
+
   test('writing one preference preserves the other', () => {
     writeQuotaUiState({ sortMode: 'soonest' });
     writeQuotaUiState({ tab: 'kimi' });

@@ -146,6 +146,16 @@ describe('sortQuotaEntries', () => {
     ]);
   });
 
+  test('weekly mode applies the same ordering rules through its own resolver', () => {
+    // The mode itself is opaque to sortQuotaEntries: only 'default' short-circuits.
+    const sorted = sortQuotaEntries(
+      entries,
+      'weekly',
+      resolver({ 'codex-b.json': 200, 'claude-a.json': 100 })
+    );
+    expect(byName(sorted).slice(0, 2)).toEqual(['claude-a.json', 'codex-b.json']);
+  });
+
   test('sinks credentials with no instant, keeping their provider-grouped order', () => {
     // Loading is click-to-fetch, so an unloaded tail is the normal case.
     const sorted = sortQuotaEntries(

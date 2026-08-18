@@ -1150,6 +1150,7 @@
     "sort_label": "Сортировка",
     "sort_default": "По умолчанию",
     "sort_soonest": "Сначала ближайшее восстановление",
+    "sort_weekly": "Сначала ближайший недельный сброс",
     "meta_credentials": "{{count}} учётных данных",
     "meta_loaded": "{{count}} загружено",
     "meta_attention": "{{count}} требуют внимания",

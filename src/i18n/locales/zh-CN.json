@@ -1163,6 +1163,7 @@
     "sort_label": "排序",
     "sort_default": "默认",
     "sort_soonest": "最快恢复优先",
+    "sort_weekly": "7 天重置最早优先",
     "meta_credentials": "{{count}} 个凭证",
     "meta_loaded": "{{count}} 个已加载",
     "meta_attention": "{{count}} 个需关注",

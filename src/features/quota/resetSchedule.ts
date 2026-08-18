@@ -27,6 +27,8 @@ export interface QuotaRowInstant {
   rowId: string;
   atMs: number;
   kind: 'window' | 'credit';
+  /** Window length in hours when the provider states one; null for credits and legacy payloads. */
+  periodHours: number | null;
 }
 
 /**
@@ -51,6 +53,7 @@ export function resetCreditRowId(
 interface WindowLike {
   id?: string;
   resetAtMs?: number | null;
+  periodHours?: number | null;
 }
 
 interface ResetCreditLike {
@@ -62,14 +65,31 @@ interface ResetCreditLike {
 /** Row id used by the xAI weekly limit, which has no id of its own. */
 export const XAI_WEEKLY_ROW_ID = 'xai:weekly';
 
+/** Hours in a 7-day window: what Claude and Codex report for their weekly limits. */
+export const WEEKLY_PERIOD_HOURS = 24 * 7;
+
+/**
+ * Tolerant on purpose: Claude and Codex state 168 exactly, but xAI derives its
+ * hours from two billing instants, so anything within an hour of a week is one.
+ */
+const isWeeklyPeriod = (hours: number | null): boolean =>
+  hours !== null && Math.abs(hours - WEEKLY_PERIOD_HOURS) < 1;
+
 const isUsableMs = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
+
+const usablePeriodHours = (value: unknown): number | null => (isUsableMs(value) ? value : null);
 
 const collectRows = (rows: readonly WindowLike[], fallbackPrefix: string): QuotaRowInstant[] =>
   rows
     .map((row, index): QuotaRowInstant | null =>
       isUsableMs(row.resetAtMs)
-        ? { rowId: row.id || `${fallbackPrefix}-${index}`, atMs: row.resetAtMs, kind: 'window' }
+        ? {
+            rowId: row.id || `${fallbackPrefix}-${index}`,
+            atMs: row.resetAtMs,
+            kind: 'window',
+            periodHours: usablePeriodHours(row.periodHours),
+          }
         : null
     )
     .filter((instant): instant is QuotaRowInstant => instant !== null);
@@ -102,7 +122,7 @@ export function collectQuotaRowInstants(
         const atMs = parseIsoToMs(credit.expiresAt);
         return atMs === null
           ? null
-          : { rowId: resetCreditRowId(credit, index), atMs, kind: 'credit' };
+          : { rowId: resetCreditRowId(credit, index), atMs, kind: 'credit', periodHours: null };
       })
       .filter((instant): instant is QuotaRowInstant => instant !== null);
 
@@ -111,10 +131,25 @@ export function collectQuotaRowInstants(
 
   if (provider === 'xai') {
     const billing = (
-      quota as { billing?: { periodType?: string; resetAtMs?: number | null } | null }
+      quota as {
+        billing?: {
+          periodType?: string;
+          resetAtMs?: number | null;
+          periodHours?: number | null;
+        } | null;
+      }
     ).billing;
     if (!billing || billing.periodType !== 'weekly' || !isUsableMs(billing.resetAtMs)) return [];
-    return [{ rowId: XAI_WEEKLY_ROW_ID, atMs: billing.resetAtMs, kind: 'window' }];
+    return [
+      {
+        rowId: XAI_WEEKLY_ROW_ID,
+        atMs: billing.resetAtMs,
+        kind: 'window',
+        // 'weekly' is a 7-day period by definition, so a summary that derived
+        // no hours of its own still counts as one.
+        periodHours: usablePeriodHours(billing.periodHours) ?? WEEKLY_PERIOD_HOURS,
+      },
+    ];
   }
 
   if (provider === 'antigravity') {
@@ -185,6 +220,28 @@ export function nextRecoveryMs(
 ): number | null {
   let best: number | null = null;
   for (const instant of collectQuotaRowInstants(provider, quota)) {
+    if (instant.atMs <= nowMs) continue;
+    if (best === null || instant.atMs < best) best = instant.atMs;
+  }
+  return best;
+}
+
+/**
+ * Soonest upcoming reset of a 7-day window — the sort key for "soonest weekly
+ * reset first". The 5-hour windows that dominate `nextRecoveryMs` are ignored:
+ * the weekly limit is the one that governs which account can afford to serve,
+ * so it is the one worth ranking by. Null when the credential reports no
+ * weekly window (unloaded, failed, or a provider without one), which lets the
+ * sort sink it.
+ */
+export function weeklyRecoveryMs(
+  provider: QuotaProviderType,
+  quota: unknown,
+  nowMs: number
+): number | null {
+  let best: number | null = null;
+  for (const instant of collectQuotaRowInstants(provider, quota)) {
+    if (!isWeeklyPeriod(instant.periodHours)) continue;
     if (instant.atMs <= nowMs) continue;
     if (best === null || instant.atMs < best) best = instant.atMs;
   }

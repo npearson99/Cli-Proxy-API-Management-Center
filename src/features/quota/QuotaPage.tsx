@@ -26,6 +26,7 @@ import { QuotaCard } from './components/QuotaCard';
 import { QuotaTimeline } from './components/QuotaTimeline';
 import {
   CARD_ENTRANCE_BUDGET_MS,
+  QUOTA_DEFAULT_SORT_MODE,
   QUOTA_PAGE_SIZE,
   QUOTA_SORT_MODES,
   QUOTA_TAB_ORDER,
@@ -40,7 +41,7 @@ import {
   sortQuotaEntries,
   type QuotaFileEntry,
 } from './logic';
-import { nextRecoveryMs } from './resetSchedule';
+import { nextRecoveryMs, weeklyRecoveryMs } from './resetSchedule';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useQuotaActions } from './hooks/useQuotaActions';
@@ -67,7 +68,7 @@ export function QuotaPage() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState<QuotaTabId>(() => readQuotaUiState()?.tab ?? 'all');
   const [sortMode, setSortMode] = useState<QuotaSortMode>(
-    () => readQuotaUiState()?.sortMode ?? 'default'
+    () => readQuotaUiState()?.sortMode ?? QUOTA_DEFAULT_SORT_MODE
   );
   const [page, setPage] = useState(1);
   // 页头 + tabs 的入场级联（标题 → meta → 动作 → tabs，级差 70ms）
@@ -134,9 +135,12 @@ export function QuotaPage() {
   const tabCounts = useMemo(() => buildTabCounts(entries), [entries]);
   const filteredEntries = useMemo(() => filterEntriesByTab(entries, tab), [entries, tab]);
 
+  // 'weekly' ranks by the 7-day window alone; 'soonest' by whichever window
+  // or credit recovers first. 'default' never calls the resolver.
+  const recoveryMsFor = sortMode === 'weekly' ? weeklyRecoveryMs : nextRecoveryMs;
   const resolveNextRecovery = useCallback(
-    (entry: QuotaFileEntry) => nextRecoveryMs(entry.type, getQuota(entry), sortNow),
-    [getQuota, sortNow]
+    (entry: QuotaFileEntry) => recoveryMsFor(entry.type, getQuota(entry), sortNow),
+    [getQuota, sortNow, recoveryMsFor]
   );
   // 排序在分页之前：否则「最快恢复」只在当前页内成立。
   const sortedEntries = useMemo(

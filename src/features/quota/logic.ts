@@ -70,7 +70,9 @@ export function sortQuotaEntries(
   mode: QuotaSortMode,
   resolveNextRecoveryMs: (entry: QuotaFileEntry) => number | null
 ): QuotaFileEntry[] {
-  if (mode !== 'soonest') return [...entries];
+  // 'soonest' and 'weekly' share the ordering rules; the caller expresses the
+  // difference entirely through the injected resolver.
+  if (mode === 'default') return [...entries];
 
   // Decorate once — resolving pokes at provider-shaped state per entry.
   return entries

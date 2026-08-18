@@ -4,12 +4,14 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
+  WEEKLY_PERIOD_HOURS,
   XAI_WEEKLY_ROW_ID,
   collectQuotaRowInstants,
   nextRecoveryMs,
   pickSoonestRowId,
   pickUrgentRowId,
   resetCreditRowId,
+  weeklyRecoveryMs,
 } from '@/features/quota/resetSchedule';
 import { DAY_MS, HOUR_MS } from '@/utils/time/durations';
 
@@ -19,16 +21,16 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const claudeQuota = {
   status: 'success',
   windows: [
-    { id: 'five_hour', resetAtMs: NOW + 3 * HOUR_MS },
-    { id: 'seven_day', resetAtMs: NOW + 4 * DAY_MS },
+    { id: 'five_hour', resetAtMs: NOW + 3 * HOUR_MS, periodHours: 5 },
+    { id: 'seven_day', resetAtMs: NOW + 4 * DAY_MS, periodHours: WEEKLY_PERIOD_HOURS },
   ],
 };
 
 const codexQuota = {
   status: 'success',
   windows: [
-    { id: 'primary', resetAtMs: NOW + 3 * HOUR_MS },
-    { id: 'secondary', resetAtMs: NOW + 6 * DAY_MS },
+    { id: 'primary', resetAtMs: NOW + 3 * HOUR_MS, periodHours: 5 },
+    { id: 'secondary', resetAtMs: NOW + 6 * DAY_MS, periodHours: WEEKLY_PERIOD_HOURS },
   ],
   rateLimitResetCredits: [
     { id: 'credit-a', status: 'available', expiresAt: iso(NOW + 11 * DAY_MS) },
@@ -39,8 +41,13 @@ const codexQuota = {
 describe('collectQuotaRowInstants', () => {
   test('collects every Claude window', () => {
     expect(collectQuotaRowInstants('claude', claudeQuota)).toEqual([
-      { rowId: 'five_hour', atMs: NOW + 3 * HOUR_MS, kind: 'window' },
-      { rowId: 'seven_day', atMs: NOW + 4 * DAY_MS, kind: 'window' },
+      { rowId: 'five_hour', atMs: NOW + 3 * HOUR_MS, kind: 'window', periodHours: 5 },
+      {
+        rowId: 'seven_day',
+        atMs: NOW + 4 * DAY_MS,
+        kind: 'window',
+        periodHours: WEEKLY_PERIOD_HOURS,
+      },
     ]);
   });
 
@@ -71,7 +78,8 @@ describe('collectQuotaRowInstants', () => {
   test('collects the xAI weekly window', () => {
     const quota = { status: 'success', billing: { periodType: 'weekly', resetAtMs: NOW + DAY_MS } };
     expect(collectQuotaRowInstants('xai', quota)).toEqual([
-      { rowId: XAI_WEEKLY_ROW_ID, atMs: NOW + DAY_MS, kind: 'window' },
+      // No stated hours on the summary: 'weekly' is a 7-day period by definition.
+      { rowId: XAI_WEEKLY_ROW_ID, atMs: NOW + DAY_MS, kind: 'window', periodHours: 168 },
     ]);
   });
 
@@ -148,22 +156,24 @@ describe('pickSoonestRowId', () => {
 
   test('skips instants that have already passed', () => {
     const instants = [
-      { rowId: 'past', atMs: NOW - HOUR_MS, kind: 'window' as const },
-      { rowId: 'exactly-now', atMs: NOW, kind: 'window' as const },
-      { rowId: 'future', atMs: NOW + HOUR_MS, kind: 'window' as const },
+      { rowId: 'past', atMs: NOW - HOUR_MS, kind: 'window' as const, periodHours: null },
+      { rowId: 'exactly-now', atMs: NOW, kind: 'window' as const, periodHours: null },
+      { rowId: 'future', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
     ];
     expect(pickSoonestRowId(instants, NOW)).toBe('future');
   });
 
   test('returns null when nothing is pending', () => {
     expect(pickSoonestRowId([], NOW)).toBeNull();
-    expect(pickSoonestRowId([{ rowId: 'past', atMs: NOW - 1, kind: 'window' }], NOW)).toBeNull();
+    expect(
+      pickSoonestRowId([{ rowId: 'past', atMs: NOW - 1, kind: 'window', periodHours: null }], NOW)
+    ).toBeNull();
   });
 
   test('breaks ties deterministically on row id', () => {
     const a = [
-      { rowId: 'b', atMs: NOW + HOUR_MS, kind: 'window' as const },
-      { rowId: 'a', atMs: NOW + HOUR_MS, kind: 'window' as const },
+      { rowId: 'b', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
+      { rowId: 'a', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
     ];
     expect(pickSoonestRowId(a, NOW)).toBe('a');
     expect(pickSoonestRowId([...a].reverse(), NOW)).toBe('a');
@@ -173,9 +183,19 @@ describe('pickSoonestRowId', () => {
 describe('pickUrgentRowId', () => {
   test('highlights only the nearest reset strictly inside the final hour', () => {
     const instants = [
-      { rowId: 'later-urgent', atMs: NOW + 45 * 60_000, kind: 'window' as const },
-      { rowId: 'nearest-urgent', atMs: NOW + 30 * 60_000, kind: 'window' as const },
-      { rowId: 'past', atMs: NOW - 1, kind: 'window' as const },
+      {
+        rowId: 'later-urgent',
+        atMs: NOW + 45 * 60_000,
+        kind: 'window' as const,
+        periodHours: null,
+      },
+      {
+        rowId: 'nearest-urgent',
+        atMs: NOW + 30 * 60_000,
+        kind: 'window' as const,
+        periodHours: null,
+      },
+      { rowId: 'past', atMs: NOW - 1, kind: 'window' as const, periodHours: null },
     ];
 
     expect(pickUrgentRowId(instants, NOW)).toBe('nearest-urgent');
@@ -185,8 +205,8 @@ describe('pickUrgentRowId', () => {
     expect(
       pickUrgentRowId(
         [
-          { rowId: 'exactly-one-hour', atMs: NOW + HOUR_MS, kind: 'window' },
-          { rowId: 'later', atMs: NOW + 2 * HOUR_MS, kind: 'window' },
+          { rowId: 'exactly-one-hour', atMs: NOW + HOUR_MS, kind: 'window', periodHours: null },
+          { rowId: 'later', atMs: NOW + 2 * HOUR_MS, kind: 'window', periodHours: null },
         ],
         NOW
       )
@@ -235,5 +255,52 @@ describe('nextRecoveryMs', () => {
   test('is null when every known instant has passed', () => {
     const quota = { status: 'success', windows: [{ id: 'stale', resetAtMs: NOW - 1 }] };
     expect(nextRecoveryMs('claude', quota, NOW)).toBeNull();
+  });
+});
+
+describe('weeklyRecoveryMs', () => {
+  test('ranks by the 7-day window, ignoring the sooner 5-hour one', () => {
+    expect(weeklyRecoveryMs('claude', claudeQuota, NOW)).toBe(NOW + 4 * DAY_MS);
+  });
+
+  test('ignores Codex reset credits even when they expire before the weekly window', () => {
+    // credit-b expires at NOW + 2d, well before the weekly window at NOW + 6d.
+    expect(weeklyRecoveryMs('codex', codexQuota, NOW)).toBe(NOW + 6 * DAY_MS);
+  });
+
+  test('tolerates hours derived from instants rather than stated exactly', () => {
+    const quota = {
+      status: 'success',
+      windows: [{ id: 'w', resetAtMs: NOW + DAY_MS, periodHours: 167.5 }],
+    };
+    expect(weeklyRecoveryMs('claude', quota, NOW)).toBe(NOW + DAY_MS);
+  });
+
+  test('counts xAI weekly billing as a weekly window even without stated hours', () => {
+    const quota = { status: 'success', billing: { periodType: 'weekly', resetAtMs: NOW + DAY_MS } };
+    expect(weeklyRecoveryMs('xai', quota, NOW)).toBe(NOW + DAY_MS);
+  });
+
+  test('is null when no weekly window exists, so sorting can sink it', () => {
+    const monthly = {
+      status: 'success',
+      windows: [{ id: 'monthly', resetAtMs: NOW + DAY_MS, periodHours: 720 }],
+    };
+    expect(weeklyRecoveryMs('codex', monthly, NOW)).toBeNull();
+    expect(weeklyRecoveryMs('claude', undefined, NOW)).toBeNull();
+    expect(weeklyRecoveryMs('claude', { status: 'error' }, NOW)).toBeNull();
+  });
+
+  test('is null for windows that state no period at all', () => {
+    const quota = { status: 'success', windows: [{ id: 'legacy', resetAtMs: NOW + DAY_MS }] };
+    expect(weeklyRecoveryMs('claude', quota, NOW)).toBeNull();
+  });
+
+  test('skips a weekly window that already reset', () => {
+    const quota = {
+      status: 'success',
+      windows: [{ id: 'stale', resetAtMs: NOW - 1, periodHours: WEEKLY_PERIOD_HOURS }],
+    };
+    expect(weeklyRecoveryMs('claude', quota, NOW)).toBeNull();
   });
 });
