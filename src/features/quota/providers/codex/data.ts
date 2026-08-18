@@ -27,6 +27,7 @@ import {
   parseOffsetSecondsToMs,
   periodHoursFromSeconds,
   resolveResetMs,
+  WEEKLY_PERIOD_HOURS,
   resolveCodexChatgptAccountId,
   resolveCodexPlanType,
   resolveCodexSubscriptionActiveUntil,
@@ -96,7 +97,10 @@ export const buildCodexQuotaWindows = (
     labelParams: Record<string, string | number> | undefined,
     window?: CodexUsageWindow | null,
     limitReached?: boolean,
-    allowed?: boolean
+    allowed?: boolean,
+    // Legacy payloads state no limit_window_seconds; the meta that classified
+    // the window already decided what it is, so rank and timeline follow it.
+    fallbackPeriodHours: number | null = null
   ) => {
     if (!window) return;
     const resetLabel = formatCodexResetLabel(window);
@@ -107,9 +111,9 @@ export const buildCodexQuotaWindows = (
     const resetAtMs =
       resolveResetMs([window.reset_at, window.resetAt]) ??
       parseOffsetSecondsToMs(window.reset_after_seconds ?? window.resetAfterSeconds, Date.now());
-    const periodHours = periodHoursFromSeconds(
-      window.limit_window_seconds ?? window.limitWindowSeconds
-    );
+    const periodHours =
+      periodHoursFromSeconds(window.limit_window_seconds ?? window.limitWindowSeconds) ??
+      fallbackPeriodHours;
     windows.push({
       id,
       label,
@@ -202,7 +206,10 @@ export const buildCodexQuotaWindows = (
     undefined,
     rateWindows.weeklyWindow,
     rawLimitReached,
-    rawAllowed
+    rawAllowed,
+    // Safe unconditionally: the monthly meta is only ever chosen off stated
+    // seconds, so the fallback can only reach a weekly-classified window.
+    WEEKLY_PERIOD_HOURS
   );
 
   const codeReviewWindows = pickClassifiedWindows(codeReviewLimit);
@@ -229,7 +236,8 @@ export const buildCodexQuotaWindows = (
     undefined,
     codeReviewWindows.weeklyWindow,
     codeReviewLimitReached,
-    codeReviewAllowed
+    codeReviewAllowed,
+    WEEKLY_PERIOD_HOURS
   );
 
   const normalizeWindowId = (raw: string) =>
@@ -275,7 +283,8 @@ export const buildCodexQuotaWindows = (
         { name: limitName },
         additionalWindows.weeklyWindow,
         additionalLimitReached,
-        additionalAllowed
+        additionalAllowed,
+        WEEKLY_PERIOD_HOURS
       );
     });
   }

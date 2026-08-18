@@ -10,6 +10,7 @@
  * week, and no per-card percentage shows that.
  */
 
+import { WEEKLY_PERIOD_HOURS } from '@/utils/quota';
 import { DAY_MS, HOUR_MS } from '@/utils/time/durations';
 import type { QuotaProviderType } from './providers/types';
 
@@ -426,7 +427,7 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
       anchorMs: billing.resetAtMs,
       // A payload that states an end without a start can't derive its own
       // length; weekly is what `periodType` already told us.
-      periodHours: billing.periodHours ?? 24 * 7,
+      periodHours: billing.periodHours ?? WEEKLY_PERIOD_HOURS,
       remaining,
       // Per-product usage is the closest analogue to the other providers'
       // per-window breakdown.

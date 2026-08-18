@@ -18,7 +18,7 @@ import type {
   XaiProductUsageSummary,
 } from '@/types';
 import { normalizeNumberValue, normalizeQuotaFraction, normalizeStringValue } from './parsers';
-import { parseOffsetSecondsToMs, resolveResetMs } from './resetInstants';
+import { WEEKLY_PERIOD_HOURS, parseOffsetSecondsToMs, resolveResetMs } from './resetInstants';
 
 const ANTIGRAVITY_BUCKET_WINDOW_ORDER = new Map<string, number>([
   ['5h', 0],
@@ -58,7 +58,7 @@ function antigravityPeriodHours(window: string | undefined): number | null {
       return 5;
     case 'weekly':
     case 'week':
-      return 24 * 7;
+      return WEEKLY_PERIOD_HOURS;
     default:
       return null;
   }
@@ -278,8 +278,12 @@ function kimiPeriodHours(
   }
 
   const text = (label ?? '').toLowerCase();
+  // Weekly before daily: "7-day" spellings contain "day" and would otherwise
+  // classify as a 24h window, hiding the row from the weekly sort.
+  if (text.includes('weekly') || text.includes('week') || /7[-\s]?day/.test(text)) {
+    return WEEKLY_PERIOD_HOURS;
+  }
   if (text.includes('daily') || text.includes('day')) return 24;
-  if (text.includes('weekly') || text.includes('week')) return 24 * 7;
   if (text.includes('monthly') || text.includes('month')) return 24 * 30;
   if (text.includes('5h') || text.includes('hour')) return 5;
   return null;

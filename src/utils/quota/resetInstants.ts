@@ -14,6 +14,9 @@
 /** Milliseconds in an hour — window periods are expressed in hours throughout. */
 const HOUR_MS = 3_600_000;
 
+/** Hours in a 7-day window: what Claude and Codex state for their weekly limits. */
+export const WEEKLY_PERIOD_HOURS = 24 * 7;
+
 /**
  * Parse an ISO-8601 timestamp to epoch ms.
  *
@@ -83,5 +86,5 @@ export function periodHoursFromSeconds(value: unknown): number | null {
  * the key because the payload states the period nowhere else.
  */
 export function claudePeriodHours(windowKey: string): number {
-  return windowKey === 'five_hour' ? 5 : 24 * 7;
+  return windowKey === 'five_hour' ? 5 : WEEKLY_PERIOD_HOURS;
 }

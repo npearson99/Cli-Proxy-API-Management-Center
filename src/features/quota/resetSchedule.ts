@@ -18,17 +18,25 @@
  * tests fighting each other.
  */
 
-import { parseIsoToMs } from '@/utils/quota';
+import { WEEKLY_PERIOD_HOURS, normalizeNumberValue, parseIsoToMs } from '@/utils/quota';
 import { HOUR_MS } from '@/utils/time/durations';
+import type { QuotaSortMode } from './constants';
 import type { QuotaProviderType } from './providers/types';
+
+export { WEEKLY_PERIOD_HOURS };
 
 export interface QuotaRowInstant {
   /** Matches the React key of the row it belongs to. */
   rowId: string;
   atMs: number;
   kind: 'window' | 'credit';
-  /** Window length in hours when the provider states one; null for credits and legacy payloads. */
-  periodHours: number | null;
+  /**
+   * True when this instant is a 7-day limit reset. Decided at collection,
+   * where provider context still exists: stated hours near a week for window
+   * rows, by declaration for the xAI billing summary. Credits are never
+   * weekly, and neither are windows from legacy payloads that state no period.
+   */
+  weekly: boolean;
 }
 
 /**
@@ -65,20 +73,16 @@ interface ResetCreditLike {
 /** Row id used by the xAI weekly limit, which has no id of its own. */
 export const XAI_WEEKLY_ROW_ID = 'xai:weekly';
 
-/** Hours in a 7-day window: what Claude and Codex report for their weekly limits. */
-export const WEEKLY_PERIOD_HOURS = 24 * 7;
-
 /**
- * Tolerant on purpose: Claude and Codex state 168 exactly, but xAI derives its
- * hours from two billing instants, so anything within an hour of a week is one.
+ * Tolerant on purpose: Claude and Codex state 168 exactly, but derived spans
+ * wobble, and a wall-clock week that crosses a DST change is exactly 167 or
+ * 169 hours — so a full hour of drift still counts as a week.
  */
 const isWeeklyPeriod = (hours: number | null): boolean =>
-  hours !== null && Math.abs(hours - WEEKLY_PERIOD_HOURS) < 1;
+  hours !== null && Math.abs(hours - WEEKLY_PERIOD_HOURS) <= 1;
 
 const isUsableMs = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
-
-const usablePeriodHours = (value: unknown): number | null => (isUsableMs(value) ? value : null);
 
 const collectRows = (rows: readonly WindowLike[], fallbackPrefix: string): QuotaRowInstant[] =>
   rows
@@ -88,7 +92,7 @@ const collectRows = (rows: readonly WindowLike[], fallbackPrefix: string): Quota
             rowId: row.id || `${fallbackPrefix}-${index}`,
             atMs: row.resetAtMs,
             kind: 'window',
-            periodHours: usablePeriodHours(row.periodHours),
+            weekly: isWeeklyPeriod(normalizeNumberValue(row.periodHours)),
           }
         : null
     )
@@ -122,7 +126,7 @@ export function collectQuotaRowInstants(
         const atMs = parseIsoToMs(credit.expiresAt);
         return atMs === null
           ? null
-          : { rowId: resetCreditRowId(credit, index), atMs, kind: 'credit', periodHours: null };
+          : { rowId: resetCreditRowId(credit, index), atMs, kind: 'credit', weekly: false };
       })
       .filter((instant): instant is QuotaRowInstant => instant !== null);
 
@@ -131,13 +135,7 @@ export function collectQuotaRowInstants(
 
   if (provider === 'xai') {
     const billing = (
-      quota as {
-        billing?: {
-          periodType?: string;
-          resetAtMs?: number | null;
-          periodHours?: number | null;
-        } | null;
-      }
+      quota as { billing?: { periodType?: string; resetAtMs?: number | null } | null }
     ).billing;
     if (!billing || billing.periodType !== 'weekly' || !isUsableMs(billing.resetAtMs)) return [];
     return [
@@ -145,9 +143,11 @@ export function collectQuotaRowInstants(
         rowId: XAI_WEEKLY_ROW_ID,
         atMs: billing.resetAtMs,
         kind: 'window',
-        // 'weekly' is a 7-day period by definition, so a summary that derived
-        // no hours of its own still counts as one.
-        periodHours: usablePeriodHours(billing.periodHours) ?? WEEKLY_PERIOD_HOURS,
+        // Weekly by declaration, not by measured span: the summary's derived
+        // hours legitimately stray from 168 (a partial first period, monthly
+        // bounds standing in for missing weekly ones), and the card presents
+        // this instant as the weekly reset either way.
+        weekly: true,
       },
     ];
   }
@@ -209,6 +209,16 @@ export function pickUrgentRowId(
   );
 }
 
+/** Soonest instant still in the future, or null when nothing is pending. */
+const soonestUpcomingMs = (instants: readonly QuotaRowInstant[], nowMs: number): number | null => {
+  let best: number | null = null;
+  for (const instant of instants) {
+    if (instant.atMs <= nowMs) continue;
+    if (best === null || instant.atMs < best) best = instant.atMs;
+  }
+  return best;
+};
+
 /**
  * Soonest upcoming recovery instant for a whole credential — the sort key for
  * "soonest recovery first". Null when nothing is loaded or nothing is pending.
@@ -218,32 +228,42 @@ export function nextRecoveryMs(
   quota: unknown,
   nowMs: number
 ): number | null {
-  let best: number | null = null;
-  for (const instant of collectQuotaRowInstants(provider, quota)) {
-    if (instant.atMs <= nowMs) continue;
-    if (best === null || instant.atMs < best) best = instant.atMs;
-  }
-  return best;
+  return soonestUpcomingMs(collectQuotaRowInstants(provider, quota), nowMs);
 }
 
 /**
  * Soonest upcoming reset of a 7-day window — the sort key for "soonest weekly
- * reset first". The 5-hour windows that dominate `nextRecoveryMs` are ignored:
- * the weekly limit is the one that governs which account can afford to serve,
- * so it is the one worth ranking by. Null when the credential reports no
- * weekly window (unloaded, failed, or a provider without one), which lets the
- * sort sink it.
+ * reset first". The 5-hour windows and reset credits that dominate
+ * `nextRecoveryMs` are ignored. Every weekly window on the card competes,
+ * including feature-scoped ones (Codex code review, per-model limits), so the
+ * key is the card's earliest 7-day reset rather than specifically the
+ * account-wide one. Null when the credential reports no weekly window
+ * (unloaded, failed, or a provider without one), which lets the sort sink it.
  */
 export function weeklyRecoveryMs(
   provider: QuotaProviderType,
   quota: unknown,
   nowMs: number
 ): number | null {
-  let best: number | null = null;
-  for (const instant of collectQuotaRowInstants(provider, quota)) {
-    if (!isWeeklyPeriod(instant.periodHours)) continue;
-    if (instant.atMs <= nowMs) continue;
-    if (best === null || instant.atMs < best) best = instant.atMs;
-  }
-  return best;
+  return soonestUpcomingMs(
+    collectQuotaRowInstants(provider, quota).filter((instant) => instant.weekly),
+    nowMs
+  );
 }
+
+export type QuotaSortKeyResolver = (
+  provider: QuotaProviderType,
+  quota: unknown,
+  nowMs: number
+) => number | null;
+
+/**
+ * Sort-key resolver for each mode; null keeps the provider-grouped order.
+ * Exhaustive over QuotaSortMode so adding a mode fails the build here instead
+ * of silently sorting by whatever fallback the page happened to reach for.
+ */
+export const QUOTA_SORT_KEY_RESOLVERS: Record<QuotaSortMode, QuotaSortKeyResolver | null> = {
+  weekly: weeklyRecoveryMs,
+  default: null,
+  soonest: nextRecoveryMs,
+};

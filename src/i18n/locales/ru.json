@@ -1148,7 +1148,7 @@
     "description": "Следите за статусом квот OAuth для учётных данных Antigravity, Codex, Claude, Kimi и xAI.",
     "refresh_all_credentials": "Обновить все учётные данные",
     "sort_label": "Сортировка",
-    "sort_default": "По умолчанию",
+    "sort_default": "По провайдерам",
     "sort_soonest": "Сначала ближайшее восстановление",
     "sort_weekly": "Сначала ближайший недельный сброс",
     "meta_credentials": "{{count}} учётных данных",

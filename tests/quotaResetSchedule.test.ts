@@ -3,7 +3,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { QUOTA_DEFAULT_SORT_MODE } from '@/features/quota/constants';
 import {
+  QUOTA_SORT_KEY_RESOLVERS,
   WEEKLY_PERIOD_HOURS,
   XAI_WEEKLY_ROW_ID,
   collectQuotaRowInstants,
@@ -41,13 +43,8 @@ const codexQuota = {
 describe('collectQuotaRowInstants', () => {
   test('collects every Claude window', () => {
     expect(collectQuotaRowInstants('claude', claudeQuota)).toEqual([
-      { rowId: 'five_hour', atMs: NOW + 3 * HOUR_MS, kind: 'window', periodHours: 5 },
-      {
-        rowId: 'seven_day',
-        atMs: NOW + 4 * DAY_MS,
-        kind: 'window',
-        periodHours: WEEKLY_PERIOD_HOURS,
-      },
+      { rowId: 'five_hour', atMs: NOW + 3 * HOUR_MS, kind: 'window', weekly: false },
+      { rowId: 'seven_day', atMs: NOW + 4 * DAY_MS, kind: 'window', weekly: true },
     ]);
   });
 
@@ -78,8 +75,8 @@ describe('collectQuotaRowInstants', () => {
   test('collects the xAI weekly window', () => {
     const quota = { status: 'success', billing: { periodType: 'weekly', resetAtMs: NOW + DAY_MS } };
     expect(collectQuotaRowInstants('xai', quota)).toEqual([
-      // No stated hours on the summary: 'weekly' is a 7-day period by definition.
-      { rowId: XAI_WEEKLY_ROW_ID, atMs: NOW + DAY_MS, kind: 'window', periodHours: 168 },
+      // Weekly by declaration: periodType already vouched for it.
+      { rowId: XAI_WEEKLY_ROW_ID, atMs: NOW + DAY_MS, kind: 'window', weekly: true },
     ]);
   });
 
@@ -156,9 +153,9 @@ describe('pickSoonestRowId', () => {
 
   test('skips instants that have already passed', () => {
     const instants = [
-      { rowId: 'past', atMs: NOW - HOUR_MS, kind: 'window' as const, periodHours: null },
-      { rowId: 'exactly-now', atMs: NOW, kind: 'window' as const, periodHours: null },
-      { rowId: 'future', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
+      { rowId: 'past', atMs: NOW - HOUR_MS, kind: 'window' as const, weekly: false },
+      { rowId: 'exactly-now', atMs: NOW, kind: 'window' as const, weekly: false },
+      { rowId: 'future', atMs: NOW + HOUR_MS, kind: 'window' as const, weekly: false },
     ];
     expect(pickSoonestRowId(instants, NOW)).toBe('future');
   });
@@ -166,14 +163,14 @@ describe('pickSoonestRowId', () => {
   test('returns null when nothing is pending', () => {
     expect(pickSoonestRowId([], NOW)).toBeNull();
     expect(
-      pickSoonestRowId([{ rowId: 'past', atMs: NOW - 1, kind: 'window', periodHours: null }], NOW)
+      pickSoonestRowId([{ rowId: 'past', atMs: NOW - 1, kind: 'window', weekly: false }], NOW)
     ).toBeNull();
   });
 
   test('breaks ties deterministically on row id', () => {
     const a = [
-      { rowId: 'b', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
-      { rowId: 'a', atMs: NOW + HOUR_MS, kind: 'window' as const, periodHours: null },
+      { rowId: 'b', atMs: NOW + HOUR_MS, kind: 'window' as const, weekly: false },
+      { rowId: 'a', atMs: NOW + HOUR_MS, kind: 'window' as const, weekly: false },
     ];
     expect(pickSoonestRowId(a, NOW)).toBe('a');
     expect(pickSoonestRowId([...a].reverse(), NOW)).toBe('a');
@@ -187,15 +184,15 @@ describe('pickUrgentRowId', () => {
         rowId: 'later-urgent',
         atMs: NOW + 45 * 60_000,
         kind: 'window' as const,
-        periodHours: null,
+        weekly: false,
       },
       {
         rowId: 'nearest-urgent',
         atMs: NOW + 30 * 60_000,
         kind: 'window' as const,
-        periodHours: null,
+        weekly: false,
       },
-      { rowId: 'past', atMs: NOW - 1, kind: 'window' as const, periodHours: null },
+      { rowId: 'past', atMs: NOW - 1, kind: 'window' as const, weekly: false },
     ];
 
     expect(pickUrgentRowId(instants, NOW)).toBe('nearest-urgent');
@@ -205,8 +202,8 @@ describe('pickUrgentRowId', () => {
     expect(
       pickUrgentRowId(
         [
-          { rowId: 'exactly-one-hour', atMs: NOW + HOUR_MS, kind: 'window', periodHours: null },
-          { rowId: 'later', atMs: NOW + 2 * HOUR_MS, kind: 'window', periodHours: null },
+          { rowId: 'exactly-one-hour', atMs: NOW + HOUR_MS, kind: 'window', weekly: false },
+          { rowId: 'later', atMs: NOW + 2 * HOUR_MS, kind: 'window', weekly: false },
         ],
         NOW
       )
@@ -276,9 +273,68 @@ describe('weeklyRecoveryMs', () => {
     expect(weeklyRecoveryMs('claude', quota, NOW)).toBe(NOW + DAY_MS);
   });
 
+  test('a DST-shifted week — exactly 167 or 169 hours — still counts as weekly', () => {
+    for (const periodHours of [167, 169]) {
+      const quota = {
+        status: 'success',
+        windows: [{ id: 'w', resetAtMs: NOW + DAY_MS, periodHours }],
+      };
+      expect(weeklyRecoveryMs('claude', quota, NOW)).toBe(NOW + DAY_MS);
+    }
+    for (const periodHours of [166, 170]) {
+      const quota = {
+        status: 'success',
+        windows: [{ id: 'w', resetAtMs: NOW + DAY_MS, periodHours }],
+      };
+      expect(weeklyRecoveryMs('claude', quota, NOW)).toBeNull();
+    }
+  });
+
+  test('accepts hours a payload states as a numeric string', () => {
+    const quota = {
+      status: 'success',
+      windows: [{ id: 'w', resetAtMs: NOW + DAY_MS, periodHours: '168' }],
+    };
+    expect(weeklyRecoveryMs('claude', quota, NOW)).toBe(NOW + DAY_MS);
+  });
+
   test('counts xAI weekly billing as a weekly window even without stated hours', () => {
     const quota = { status: 'success', billing: { periodType: 'weekly', resetAtMs: NOW + DAY_MS } };
     expect(weeklyRecoveryMs('xai', quota, NOW)).toBe(NOW + DAY_MS);
+  });
+
+  test('trusts the xAI weekly declaration even when derived hours stray far from a week', () => {
+    // Monthly bounds standing in for missing weekly ones, or a partial first
+    // period, both derive hours nowhere near 168. periodType still says weekly.
+    for (const periodHours of [720, 72]) {
+      const quota = {
+        status: 'success',
+        billing: { periodType: 'weekly', resetAtMs: NOW + DAY_MS, periodHours },
+      };
+      expect(weeklyRecoveryMs('xai', quota, NOW)).toBe(NOW + DAY_MS);
+    }
+  });
+
+  test('ranks Antigravity weekly buckets and Kimi weekly rows', () => {
+    const antigravity = {
+      status: 'success',
+      groups: [
+        {
+          id: 'g1',
+          buckets: [
+            { id: 'session', resetAtMs: NOW + HOUR_MS, periodHours: 5 },
+            { id: 'week', resetAtMs: NOW + 2 * DAY_MS, periodHours: WEEKLY_PERIOD_HOURS },
+          ],
+        },
+      ],
+    };
+    expect(weeklyRecoveryMs('antigravity', antigravity, NOW)).toBe(NOW + 2 * DAY_MS);
+
+    const kimi = {
+      status: 'success',
+      rows: [{ id: 'r1', resetAtMs: NOW + 3 * DAY_MS, periodHours: WEEKLY_PERIOD_HOURS }],
+    };
+    expect(weeklyRecoveryMs('kimi', kimi, NOW)).toBe(NOW + 3 * DAY_MS);
   });
 
   test('is null when no weekly window exists, so sorting can sink it', () => {
@@ -302,5 +358,19 @@ describe('weeklyRecoveryMs', () => {
       windows: [{ id: 'stale', resetAtMs: NOW - 1, periodHours: WEEKLY_PERIOD_HOURS }],
     };
     expect(weeklyRecoveryMs('claude', quota, NOW)).toBeNull();
+  });
+});
+
+describe('QUOTA_SORT_KEY_RESOLVERS', () => {
+  test('wires the page default to the weekly ranking', () => {
+    // The commit's whole point: the page opens ranked the way cpa-route ranks.
+    expect(QUOTA_DEFAULT_SORT_MODE).toBe('weekly');
+    expect(QUOTA_SORT_KEY_RESOLVERS[QUOTA_DEFAULT_SORT_MODE]).toBe(weeklyRecoveryMs);
+  });
+
+  test('maps every mode: weekly and soonest resolve, default keeps provider order', () => {
+    expect(QUOTA_SORT_KEY_RESOLVERS.weekly).toBe(weeklyRecoveryMs);
+    expect(QUOTA_SORT_KEY_RESOLVERS.soonest).toBe(nextRecoveryMs);
+    expect(QUOTA_SORT_KEY_RESOLVERS.default).toBeNull();
   });
 });

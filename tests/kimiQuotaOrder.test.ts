@@ -44,6 +44,26 @@ describe('Kimi quota ordering', () => {
     expect(lane.anchorMs).toBe(rows[0]?.resetAtMs);
     expect(lane.periodHours).toBe(5);
   });
+
+  test('classifies a "7-day" label as weekly, not daily', () => {
+    // "7-day" contains "day"; the weekly check must win or the row hides from
+    // the weekly sort as a 24h window.
+    const rows = buildKimiQuotaRows({
+      limits: [
+        {
+          detail: {
+            name: '7-Day Limit',
+            used: '2',
+            limit: '100',
+            resetTime: '2099-07-31T06:59:23.136523Z',
+          },
+        },
+      ],
+    });
+
+    expect(rows[0]?.label).toBe('7-Day Limit');
+    expect(rows[0]?.periodHours).toBe(168);
+  });
 });
 
 describe('Kimi quota reset formatting', () => {

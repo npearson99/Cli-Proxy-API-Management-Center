@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import type { TFunction } from 'i18next';
 import { CODEX_CONFIG, buildCodexQuotaWindows } from '@/features/quota/providers/codex/data';
 import type { CodexQuotaState, CodexUsagePayload } from '@/types';
-import { normalizeCodexResetCreditsPayload, parseCodexUsagePayload } from '@/utils/quota';
+import {
+  WEEKLY_PERIOD_HOURS,
+  normalizeCodexResetCreditsPayload,
+  parseCodexUsagePayload,
+} from '@/utils/quota';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -57,6 +61,28 @@ describe('Codex current usage payload', () => {
     ]);
     expect(windows.map(({ usedPercent }) => usedPercent)).toEqual([1, 0]);
     expect(windows[1]?.labelParams).toEqual({ name: 'GPT-5.3-Codex-Spark' });
+  });
+
+  test('backfills the weekly period on legacy payloads without window seconds', () => {
+    // No limit_window_seconds anywhere: classification falls back to
+    // primary/secondary ordering. The card labels the secondary window weekly,
+    // so the weekly sort and the timeline must see it as one too.
+    const legacy: CodexUsagePayload = {
+      plan_type: 'plus',
+      rate_limit: {
+        allowed: true,
+        limit_reached: false,
+        primary_window: { used_percent: 10, reset_after_seconds: 3600 },
+        secondary_window: { used_percent: 20, reset_after_seconds: 24 * 3600 },
+      },
+    };
+
+    const windows = buildCodexQuotaWindows(legacy, t);
+    expect(windows.map(({ id }) => id)).toEqual(['five-hour', 'weekly']);
+    expect(windows.find(({ id }) => id === 'weekly')?.periodHours).toBe(WEEKLY_PERIOD_HOURS);
+    // The five-hour guess stays unstated — session-mode rendering must not
+    // treat an unknown window as a real 5-hour one.
+    expect(windows.find(({ id }) => id === 'five-hour')?.periodHours).toBeNull();
   });
 
   test('shows reset support when total credits remain but none currently apply', () => {

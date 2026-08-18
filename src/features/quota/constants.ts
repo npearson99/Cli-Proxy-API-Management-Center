@@ -21,8 +21,8 @@ export type QuotaSortMode = (typeof QUOTA_SORT_MODES)[number];
 
 /**
  * What the page opens on before the user has touched the sort control.
- * This fork exists to rank credentials the way cpa-route does — by the
- * weekly window, which is the limit that actually governs account choice.
+ * cpa-route ranks accounts by their weekly window — the limit that governs
+ * which account can afford to serve — and the page opens on that same ranking.
  */
 export const QUOTA_DEFAULT_SORT_MODE: QuotaSortMode = 'weekly';
 

@@ -41,7 +41,7 @@ import {
   sortQuotaEntries,
   type QuotaFileEntry,
 } from './logic';
-import { nextRecoveryMs, weeklyRecoveryMs } from './resetSchedule';
+import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useQuotaActions } from './hooks/useQuotaActions';
@@ -126,8 +126,8 @@ export function QuotaPage() {
 
   /* ---------- 归类 / 过滤 / 排序 / 分页 ---------- */
 
-  // 只在「最快恢复优先」下订阅分钟时钟。默认序下不门控的话，pageItems 每分钟
-  // 换一次身份，会反复空转下面那个「刷新全部」的 loading 下降沿 effect。
+  // 只有默认序不订阅分钟时钟；'weekly' / 'soonest' 用它让已过去的重置时刻失效。
+  // 顺序没变时排序 memo 会复用上一次的数组，避免 pageItems 每分钟换身份。
   const tick = useNow(sortMode !== 'default');
   const sortNow = sortMode === 'default' ? 0 : tick;
 
@@ -135,17 +135,31 @@ export function QuotaPage() {
   const tabCounts = useMemo(() => buildTabCounts(entries), [entries]);
   const filteredEntries = useMemo(() => filterEntriesByTab(entries, tab), [entries, tab]);
 
-  // 'weekly' ranks by the 7-day window alone; 'soonest' by whichever window
-  // or credit recovers first. 'default' never calls the resolver.
-  const recoveryMsFor = sortMode === 'weekly' ? weeklyRecoveryMs : nextRecoveryMs;
+  const recoveryMsFor = QUOTA_SORT_KEY_RESOLVERS[sortMode];
   const resolveNextRecovery = useCallback(
-    (entry: QuotaFileEntry) => recoveryMsFor(entry.type, getQuota(entry), sortNow),
+    (entry: QuotaFileEntry) =>
+      recoveryMsFor === null ? null : recoveryMsFor(entry.type, getQuota(entry), sortNow),
     [getQuota, sortNow, recoveryMsFor]
   );
   // 排序在分页之前：否则「最快恢复」只在当前页内成立。
+  // 顺序先序列化成基元字符串：分钟时钟通常不改变顺序，字符串相等时下面的
+  // memo 不重建数组，pageItems 及其下游（「刷新全部」的下降沿 effect、
+  // 时间线泳道 memo）就不会每分钟换一次身份。
+  const sortedIndexKey = useMemo(() => {
+    const indexOf = new Map(filteredEntries.map((entry, index) => [entry, index]));
+    return sortQuotaEntries(filteredEntries, sortMode, resolveNextRecovery)
+      .map((entry) => indexOf.get(entry))
+      .join(',');
+  }, [filteredEntries, sortMode, resolveNextRecovery]);
   const sortedEntries = useMemo(
-    () => sortQuotaEntries(filteredEntries, sortMode, resolveNextRecovery),
-    [filteredEntries, sortMode, resolveNextRecovery]
+    () =>
+      sortedIndexKey === ''
+        ? []
+        : sortedIndexKey.split(',').flatMap((token) => {
+            const entry = filteredEntries[Number(token)];
+            return entry ? [entry] : [];
+          }),
+    [filteredEntries, sortedIndexKey]
   );
 
   const { pageItems, currentPage, totalPages } = useMemo(
