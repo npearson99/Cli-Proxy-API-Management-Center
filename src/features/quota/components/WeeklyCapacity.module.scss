@@ -1,0 +1,132 @@
+@use '../../../styles/mixins' as *;
+
+/* 7 天余量总览条：与 tabs 同宽的一行统计，语汇沿用页头 meta 行（mono / tabular-nums）。
+ * 数字是主角，所以图标与标签保持中性，只有数值带语义色。 */
+
+.strip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* 覆盖率不全时才出现：数字只统计已加载的凭证，不说出来就会被读成全量。 */
+.partialHint {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 172px), 1fr));
+  gap: 12px 18px;
+  min-width: 0;
+}
+
+.stat {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.iconWrap {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  margin-top: 1px;
+}
+
+.icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.iconFallback {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.value {
+  font-family: $font-mono;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.note {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.toneOk {
+  color: var(--viz-success);
+}
+
+/* 配额页自己的中间色，不用 --warning-color：后者与 --error-color 同值，
+ * 三档语义会退化成两档，中间档看起来就是「已耗尽」。 */
+.toneWarn {
+  color: var(--quota-medium-color);
+}
+
+.toneCritical {
+  color: var(--danger-color);
+}
+
+.toneUnknown {
+  color: var(--text-secondary);
+}
+
+@include mobile {
+  .row {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  }
+}

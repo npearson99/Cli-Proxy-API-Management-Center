@@ -24,6 +24,7 @@ import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
 import { QuotaTimeline } from './components/QuotaTimeline';
+import { WeeklyCapacity } from './components/WeeklyCapacity';
 import {
   CARD_ENTRANCE_BUDGET_MS,
   QUOTA_DEFAULT_SORT_MODE,
@@ -42,6 +43,7 @@ import {
   type QuotaFileEntry,
 } from './logic';
 import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
+import { summarizeWeeklyCapacity } from './weeklyCapacity';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useQuotaActions } from './hooks/useQuotaActions';
@@ -185,6 +187,14 @@ export function QuotaPage() {
     [t]
   );
 
+  // filteredEntries, not pageItems: "how much is left" is a question about the
+  // whole filtered set, and a per-page total would change under the pager while
+  // the fleet did not.
+  const weeklyCapacity = useMemo(
+    () => summarizeWeeklyCapacity(filteredEntries, getQuota),
+    [filteredEntries, getQuota]
+  );
+
   const { loadedCount, attentionCount } = useMemo(() => {
     let loaded = 0;
     let attention = 0;
@@ -299,6 +309,8 @@ export function QuotaPage() {
             />
           </div>
         </div>
+
+        {!loading && <WeeklyCapacity summary={weeklyCapacity} resolvedTheme={resolvedTheme} />}
 
         {error && (
           <div className={styles.errorBanner} role="alert">
