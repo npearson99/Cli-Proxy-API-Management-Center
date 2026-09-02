@@ -7,6 +7,7 @@ import {
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
 import type { WeeklyCapacityRow, WeeklyCapacitySummary } from '../weeklyCapacity';
+import { QUOTA_PROGRESS_HIGH_THRESHOLD, QUOTA_PROGRESS_MEDIUM_THRESHOLD } from './QuotaMeter';
 import styles from './WeeklyCapacity.module.scss';
 
 export type WeeklyCapacityProps = {
@@ -26,14 +27,30 @@ export type WeeklyCapacityProps = {
  */
 const formatAccounts = (value: number) => value.toFixed(1);
 
-/** Full → empty, so a nearly-spent provider reads as spent at a glance. */
-const toneFor = (row: WeeklyCapacityRow): string => {
-  if (row.measured === 0) return styles.toneUnknown;
-  const share = row.accountsFree / row.measured;
-  if (share <= 0.1) return styles.toneCritical;
-  if (share <= 0.3) return styles.toneWarn;
-  return styles.toneOk;
+type Figure = Pick<WeeklyCapacityRow, 'accountsFree' | 'measured'>;
+
+/** Same remaining-share cut points as the card meters below, so the two agree. */
+const toneFor = (figure: Figure): string => {
+  if (figure.measured === 0) return styles.toneUnknown;
+  const remaining = (figure.accountsFree / figure.measured) * 100;
+  if (remaining >= QUOTA_PROGRESS_HIGH_THRESHOLD) return styles.toneOk;
+  if (remaining >= QUOTA_PROGRESS_MEDIUM_THRESHOLD) return styles.toneWarn;
+  return styles.toneCritical;
 };
+
+function AccountsFigure({ figure, className }: { figure: Figure; className: string }) {
+  const { t } = useTranslation();
+  return (
+    <span className={`${className} ${toneFor(figure)}`}>
+      {/* `count` drives i18next pluralisation, so a single-seat provider reads
+          "of 1 account" rather than "1 accounts". */}
+      {t('quota_management.capacity_accounts', {
+        free: formatAccounts(figure.accountsFree),
+        count: figure.measured,
+      })}
+    </span>
+  );
+}
 
 export function WeeklyCapacity({ summary, resolvedTheme }: WeeklyCapacityProps) {
   const { t } = useTranslation();
@@ -41,11 +58,7 @@ export function WeeklyCapacity({ summary, resolvedTheme }: WeeklyCapacityProps) 
   if (summary.rows.length === 0) return null;
 
   return (
-    <section
-      className={styles.strip}
-      data-reveal
-      aria-label={t('quota_management.capacity_title')}
-    >
+    <section className={styles.strip} data-reveal aria-label={t('quota_management.capacity_title')}>
       <div className={styles.heading}>
         <span className={styles.title}>{t('quota_management.capacity_title')}</span>
         {summary.partial && (
@@ -83,15 +96,17 @@ export function WeeklyCapacity({ summary, resolvedTheme }: WeeklyCapacityProps) 
                     {t('quota_management.capacity_none_measured')}
                   </span>
                 ) : (
-                  <span className={`${styles.value} ${toneFor(row)}`}>
-                    {/* `count` drives i18next pluralisation, so a single-seat
-                        provider reads "of 1 account" rather than "1 accounts". */}
-                    {t('quota_management.capacity_accounts', {
-                      free: formatAccounts(row.accountsFree),
-                      count: row.measured,
-                    })}
-                  </span>
+                  <AccountsFigure figure={row} className={styles.value} />
                 )}
+                {row.scoped.map((scope) => (
+                  <span key={scope.id} className={styles.scoped}>
+                    <span className={styles.label}>{t(scope.labelKey)}</span>
+                    <AccountsFigure
+                      figure={{ accountsFree: scope.accountsFree, measured: row.measured }}
+                      className={styles.scopedValue}
+                    />
+                  </span>
+                ))}
                 {unmeasured > 0 && row.measured > 0 && (
                   <span className={styles.note}>
                     {t('quota_management.capacity_unmeasured', { count: unmeasured })}

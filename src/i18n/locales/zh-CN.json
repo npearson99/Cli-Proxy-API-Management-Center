@@ -1167,6 +1167,7 @@
     "capacity_title": "7 天剩余额度",
     "capacity_accounts_other": "{{count}} 个账号中剩 {{free}} 个",
     "capacity_unmeasured_other": "{{count}} 个未加载",
+    "capacity_scope_fable": "Fable 5",
     "capacity_none_measured": "未加载",
     "capacity_partial": "仅统计已加载的凭证 —— 点「刷新全部」查看完整结果。",
     "meta_credentials": "{{count}} 个凭证",

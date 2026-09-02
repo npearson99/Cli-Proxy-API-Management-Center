@@ -107,9 +107,15 @@ export const CLAUDE_REQUEST_HEADERS = {
   'anthropic-beta': 'oauth-2025-04-20',
 };
 
+/** The window that governs a Claude seat's overall weekly capacity. */
+export const CLAUDE_ACCOUNT_WIDE_WINDOW_ID = 'seven-day';
+/** Fable's own weekly window, built from `limits[]` or the legacy `iguana_necktie` key. */
+export const CLAUDE_FABLE_WINDOW_ID = 'seven-day-fable';
+export const CLAUDE_FABLE_WINDOW_LABEL_KEY = 'claude_quota.seven_day_fable';
+
 export const CLAUDE_USAGE_WINDOW_KEYS = [
   { key: 'five_hour', id: 'five-hour', labelKey: 'claude_quota.five_hour' },
-  { key: 'seven_day', id: 'seven-day', labelKey: 'claude_quota.seven_day' },
+  { key: 'seven_day', id: CLAUDE_ACCOUNT_WIDE_WINDOW_ID, labelKey: 'claude_quota.seven_day' },
   {
     key: 'seven_day_oauth_apps',
     id: 'seven-day-oauth-apps',
@@ -118,10 +124,13 @@ export const CLAUDE_USAGE_WINDOW_KEYS = [
   { key: 'seven_day_opus', id: 'seven-day-opus', labelKey: 'claude_quota.seven_day_opus' },
   { key: 'seven_day_sonnet', id: 'seven-day-sonnet', labelKey: 'claude_quota.seven_day_sonnet' },
   { key: 'seven_day_cowork', id: 'seven-day-cowork', labelKey: 'claude_quota.seven_day_cowork' },
-  { key: 'iguana_necktie', id: 'seven-day-fable', labelKey: 'claude_quota.seven_day_fable' },
+  { key: 'iguana_necktie', id: CLAUDE_FABLE_WINDOW_ID, labelKey: CLAUDE_FABLE_WINDOW_LABEL_KEY },
 ] as const;
 
 // Codex API configuration
+/** The window that governs a Codex account's overall weekly capacity. */
+export const CODEX_ACCOUNT_WIDE_WINDOW_ID = 'weekly';
+
 export const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 export const CODEX_RATE_LIMIT_RESET_CREDITS_URL =
   'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits';

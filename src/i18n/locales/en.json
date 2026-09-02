@@ -1169,6 +1169,7 @@
     "capacity_accounts_other": "{{free}} of {{count}} accounts",
     "capacity_unmeasured_one": "{{count}} not loaded",
     "capacity_unmeasured_other": "{{count}} not loaded",
+    "capacity_scope_fable": "Fable 5",
     "capacity_none_measured": "not loaded",
     "capacity_partial": "Counts loaded credentials only — use Refresh all for the full picture.",
     "meta_credentials": "{{count}} credentials",

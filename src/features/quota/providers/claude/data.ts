@@ -17,6 +17,8 @@ import {
   CLAUDE_PROFILE_URL,
   CLAUDE_USAGE_URL,
   CLAUDE_REQUEST_HEADERS,
+  CLAUDE_FABLE_WINDOW_ID,
+  CLAUDE_FABLE_WINDOW_LABEL_KEY,
   CLAUDE_USAGE_WINDOW_KEYS,
   claudePeriodHours,
   normalizeNumberValue,
@@ -83,9 +85,9 @@ export const buildClaudeQuotaWindows = (
     const usedPercent = normalizeNumberValue(fableLimit.percent);
     if (usedPercent !== null) {
       windows.push({
-        id: 'seven-day-fable',
-        label: t('claude_quota.seven_day_fable'),
-        labelKey: 'claude_quota.seven_day_fable',
+        id: CLAUDE_FABLE_WINDOW_ID,
+        label: t(CLAUDE_FABLE_WINDOW_LABEL_KEY),
+        labelKey: CLAUDE_FABLE_WINDOW_LABEL_KEY,
         usedPercent,
         resetLabel: formatQuotaResetTime(fableLimit.resets_at ?? undefined),
         // `weekly_scoped` is a 7-day window by definition, so the timeline can

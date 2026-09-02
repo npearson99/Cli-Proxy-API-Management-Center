@@ -1160,6 +1160,7 @@
     "capacity_unmeasured_few": "{{count}} не загружено",
     "capacity_unmeasured_many": "{{count}} не загружено",
     "capacity_unmeasured_other": "{{count}} не загружено",
+    "capacity_scope_fable": "Fable 5",
     "capacity_none_measured": "не загружено",
     "capacity_partial": "Учитываются только загруженные учётные данные — нажмите «Обновить все».",
     "meta_credentials": "{{count}} учётных данных",

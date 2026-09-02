@@ -9,12 +9,15 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
+  scopedWeeklyHeadroom,
   summarizeWeeklyCapacity,
   weeklyHeadroom,
   type WeeklyCapacityRow,
 } from '@/features/quota/weeklyCapacity';
-import { WEEKLY_PERIOD_HOURS } from '@/utils/quota';
+import { buildClaudeQuotaWindows } from '@/features/quota/providers/claude/data';
 import type { QuotaProviderType } from '@/features/quota/providers/types';
+import { WEEKLY_PERIOD_HOURS } from '@/utils/quota';
+import type { TFunction } from 'i18next';
 
 const WEEK = WEEKLY_PERIOD_HOURS;
 
@@ -50,7 +53,10 @@ describe('weeklyHeadroom — Claude', () => {
 
   test('a scoped row alone is not mistaken for the account-wide one', () => {
     expect(
-      weeklyHeadroom('claude', claude([{ id: 'seven-day-opus', usedPercent: 10, periodHours: WEEK }]))
+      weeklyHeadroom(
+        'claude',
+        claude([{ id: 'seven-day-opus', usedPercent: 10, periodHours: WEEK }])
+      )
     ).toBeNull();
   });
 
@@ -82,6 +88,132 @@ describe('weeklyHeadroom — Claude', () => {
   });
 });
 
+describe('scopedWeeklyHeadroom — Claude Fable', () => {
+  const FABLE = 'seven-day-fable';
+
+  test('reads the Fable row when the account-wide row has more room', () => {
+    expect(
+      scopedWeeklyHeadroom(
+        'claude',
+        claude([
+          { id: 'seven-day', usedPercent: 10, periodHours: WEEK },
+          { id: FABLE, usedPercent: 60, periodHours: WEEK },
+        ]),
+        FABLE
+      )
+    ).toBeCloseTo(0.4, 10);
+  });
+
+  test('is capped by the account-wide row — a spent seat has no Fable left either', () => {
+    // Fable is served from the same weekly pool: once the account is out, an
+    // untouched Fable row is not room that can be used.
+    expect(
+      scopedWeeklyHeadroom(
+        'claude',
+        claude([
+          { id: 'seven-day', usedPercent: 90, periodHours: WEEK },
+          { id: FABLE, usedPercent: 0, periodHours: WEEK },
+        ]),
+        FABLE
+      )
+    ).toBeCloseTo(0.1, 10);
+  });
+
+  test('a seat with no Fable row of its own is bounded by the account-wide row alone', () => {
+    // Nothing scopes Fable on this plan, so the whole weekly pool serves it.
+    expect(
+      scopedWeeklyHeadroom(
+        'claude',
+        claude([{ id: 'seven-day', usedPercent: 10, periodHours: WEEK }]),
+        FABLE
+      )
+    ).toBeCloseTo(0.9, 10);
+  });
+
+  test('an unreadable account-wide row makes the Fable figure unknown, not full', () => {
+    // A seat whose overall weekly cannot be read must not count as a whole
+    // account of Fable on the strength of an untouched Fable row.
+    const fableOnly = [{ id: FABLE, usedPercent: 0, periodHours: WEEK }];
+    expect(scopedWeeklyHeadroom('claude', claude(fableOnly), FABLE)).toBeNull();
+    expect(
+      scopedWeeklyHeadroom(
+        'claude',
+        claude([{ id: 'seven-day', usedPercent: null, periodHours: WEEK }, ...fableOnly]),
+        FABLE
+      )
+    ).toBeNull();
+  });
+
+  test('reads the row the Claude data layer builds, from either payload shape', () => {
+    const t = ((key: string) => key) as TFunction;
+    const modern = buildClaudeQuotaWindows(
+      {
+        seven_day: { utilization: 20, resets_at: null },
+        limits: [
+          {
+            kind: 'weekly_scoped',
+            group: 'weekly',
+            percent: 75,
+            resets_at: null,
+            is_active: true,
+            scope: { model: { id: null, display_name: 'Fable' } },
+          },
+        ],
+      },
+      t
+    );
+    const legacy = buildClaudeQuotaWindows(
+      {
+        seven_day: { utilization: 20, resets_at: null },
+        iguana_necktie: { utilization: 75, resets_at: null },
+      },
+      t
+    );
+    expect(scopedWeeklyHeadroom('claude', claude(modern), FABLE)).toBeCloseTo(0.25, 10);
+    expect(scopedWeeklyHeadroom('claude', claude(legacy), FABLE)).toBeCloseTo(0.25, 10);
+  });
+
+  test('the scoped row does not feed back into the account-wide figure', () => {
+    const quota = claude([
+      { id: 'seven-day', usedPercent: 10, periodHours: WEEK },
+      { id: FABLE, usedPercent: 100, periodHours: WEEK },
+    ]);
+    expect(weeklyHeadroom('claude', quota)).toBeCloseTo(0.9, 10);
+    expect(scopedWeeklyHeadroom('claude', quota, FABLE)).toBe(0);
+  });
+
+  test('an unloaded card contributes nothing', () => {
+    const rows = [
+      { id: 'seven-day', usedPercent: 10, periodHours: WEEK },
+      { id: FABLE, usedPercent: 10, periodHours: WEEK },
+    ];
+    expect(scopedWeeklyHeadroom('claude', claude(rows, 'idle'), FABLE)).toBeNull();
+  });
+
+  test('a Fable row with a non-weekly period is not a Fable row', () => {
+    expect(
+      scopedWeeklyHeadroom(
+        'claude',
+        claude([
+          { id: 'seven-day', usedPercent: 10, periodHours: WEEK },
+          { id: FABLE, usedPercent: 90, periodHours: 5 },
+        ]),
+        FABLE
+      )
+    ).toBeCloseTo(0.9, 10);
+  });
+
+  test('providers without a declared account-wide row have no scoped rows', () => {
+    expect(
+      scopedWeeklyHeadroom(
+        'kimi',
+        { status: 'success', windows: [{ id: FABLE, usedPercent: 10, periodHours: WEEK }] },
+        FABLE
+      )
+    ).toBeNull();
+  });
+});
+
 describe('weeklyHeadroom — Codex', () => {
   test('reads the account-wide weekly window', () => {
     expect(
@@ -97,7 +229,10 @@ describe('weeklyHeadroom — Codex', () => {
 
   test('the code-review weekly limit is not the account limit', () => {
     expect(
-      weeklyHeadroom('codex', codex([{ id: 'code-review-weekly', usedPercent: 100, periodHours: WEEK }]))
+      weeklyHeadroom(
+        'codex',
+        codex([{ id: 'code-review-weekly', usedPercent: 100, periodHours: WEEK }])
+      )
     ).toBeNull();
   });
 
@@ -230,6 +365,59 @@ describe('summarizeWeeklyCapacity', () => {
   test('rows follow the tab order so the strip reads like the tabs above it', () => {
     const rows = summarize([entry('codex', 'd'), entry('claude', 'a')]).rows;
     expect(rows.map((row) => row.provider)).toEqual(['claude', 'codex']);
+  });
+
+  test('Fable gets its own figure under Claude, capped per seat by the account row', () => {
+    const fable = [entry('claude', 'f1'), entry('claude', 'f2'), entry('claude', 'f3')];
+    const fableQuotas: Record<string, unknown> = {
+      // 0.5 Fable left, account-wide has more: counts 0.5.
+      f1: claude([
+        { id: 'seven-day', usedPercent: 10, periodHours: WEEK },
+        { id: 'seven-day-fable', usedPercent: 50, periodHours: WEEK },
+      ]),
+      // Account-wide is the binding limit: counts 0.2, not 1.0.
+      f2: claude([
+        { id: 'seven-day', usedPercent: 80, periodHours: WEEK },
+        { id: 'seven-day-fable', usedPercent: 0, periodHours: WEEK },
+      ]),
+      // No Fable row: the whole account serves Fable, so counts 1.0.
+      f3: claude([{ id: 'seven-day', usedPercent: 0, periodHours: WEEK }]),
+    };
+    const row = rowFor(
+      summarizeWeeklyCapacity(fable, (item) => fableQuotas[item.file.name]).rows,
+      'claude'
+    );
+    expect(row?.measured).toBe(3);
+    expect(row?.scoped).toHaveLength(1);
+    expect(row?.scoped[0].id).toBe('seven-day-fable');
+    expect(row?.scoped[0].accountsFree).toBeCloseTo(1.7, 10);
+    expect(row?.scoped[0].ownRows).toBe(2);
+  });
+
+  test('a seat whose account-wide row is unreadable is unmeasured for Fable too', () => {
+    const quotas: Record<string, unknown> = {
+      f1: claude([{ id: 'seven-day-fable', usedPercent: 0, periodHours: WEEK }]),
+      f2: claude([
+        { id: 'seven-day', usedPercent: 50, periodHours: WEEK },
+        { id: 'seven-day-fable', usedPercent: 50, periodHours: WEEK },
+      ]),
+    };
+    const row = rowFor(
+      summarizeWeeklyCapacity(
+        [entry('claude', 'f1'), entry('claude', 'f2')],
+        (item) => quotas[item.file.name]
+      ).rows,
+      'claude'
+    );
+    expect(row?.measured).toBe(1);
+    expect(row?.scoped[0].ownRows).toBe(1);
+    expect(row?.scoped[0].accountsFree).toBeCloseTo(0.5, 10);
+  });
+
+  test('a model no credential publishes its own row for is omitted', () => {
+    const claudeRow = rowFor(summarize(fleet).rows, 'claude');
+    expect(claudeRow?.scoped).toEqual([]);
+    expect(rowFor(summarize(fleet).rows, 'codex')?.scoped).toEqual([]);
   });
 
   test('an empty scope yields no rows and is not partial', () => {

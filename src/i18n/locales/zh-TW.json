@@ -1193,6 +1193,7 @@
     "capacity_title": "7 天剩餘額度",
     "capacity_accounts_other": "{{count}} 個帳號中剩 {{free}} 個",
     "capacity_unmeasured_other": "{{count}} 個未載入",
+    "capacity_scope_fable": "Fable 5",
     "capacity_none_measured": "未載入",
     "capacity_partial": "僅統計已載入的憑證 —— 點「重新整理全部」查看完整結果。",
     "meta_credentials": "{{count}} 個憑證",

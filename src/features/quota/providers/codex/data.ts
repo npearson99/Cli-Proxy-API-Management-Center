@@ -15,6 +15,7 @@ import type {
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
 import {
+  CODEX_ACCOUNT_WIDE_WINDOW_ID,
   CODEX_RATE_LIMIT_RESET_CREDITS_URL,
   CODEX_RATE_LIMIT_RESET_CREDITS_CONSUME_URL,
   CODEX_USAGE_URL,
@@ -68,7 +69,7 @@ export const buildCodexQuotaWindows = (
   const MAX_MONTH_SECONDS = 31 * 24 * 60 * 60;
   const WINDOW_META = {
     codeFiveHour: { id: 'five-hour', labelKey: 'codex_quota.primary_window' },
-    codeWeekly: { id: 'weekly', labelKey: 'codex_quota.secondary_window' },
+    codeWeekly: { id: CODEX_ACCOUNT_WIDE_WINDOW_ID, labelKey: 'codex_quota.secondary_window' },
     codeMonthly: { id: 'monthly', labelKey: 'codex_quota.team_secondary_window' },
     codeReviewFiveHour: {
       id: 'code-review-five-hour',
