@@ -7,6 +7,8 @@ const t = ((key: string) => key) as TFunction;
 
 const FIVE_HOUR_RESET = 1789258200;
 const WEEKLY_RESET = 1789826400;
+// Fixed, an hour before the soonest reset, so no case depends on the wall clock.
+const NOW = (FIVE_HOUR_RESET - 3600) * 1000;
 
 const signals = (over: Record<string, string> = {}) => ({
   'Anthropic-Ratelimit-Unified-5h-Reset': String(FIVE_HOUR_RESET),
@@ -29,7 +31,8 @@ describe('Claude quota from harvested rate-limit headers', () => {
       file({
         'claude-fable-5-1': { observed_at: '2026-09-12T12:55:53.316555-07:00', signals: signals() },
       }),
-      t
+      t,
+      NOW
     );
 
     expect(result?.windows).toEqual([
@@ -76,7 +79,8 @@ describe('Claude quota from harvested rate-limit headers', () => {
           signals: signals({ 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.04' }),
         },
       }),
-      t
+      t,
+      NOW
     );
 
     const weekly = result?.windows.find((window) => window.id === 'seven-day');
@@ -90,23 +94,24 @@ describe('Claude quota from harvested rate-limit headers', () => {
       file({
         'claude-opus-5': { observed_at: '2026-09-12T12:56:15.424698-07:00', signals: signals() },
       }),
-      t
+      t,
+      NOW
     );
 
     expect(result?.windows.map((window) => window.id)).toEqual(['five-hour', 'seven-day']);
   });
 
   test('reports a seat that has never served as having nothing to show', () => {
-    expect(buildClaudeQuotaFromSignals(file(undefined), t)).toBeNull();
-    expect(buildClaudeQuotaFromSignals(file({}), t)).toBeNull();
+    expect(buildClaudeQuotaFromSignals(file(undefined), t, NOW)).toBeNull();
+    expect(buildClaudeQuotaFromSignals(file({}), t, NOW)).toBeNull();
     expect(
-      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { observed_at: '', signals: {} } }), t)
+      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { observed_at: '', signals: {} } }), t, NOW)
     ).toBeNull();
   });
 
   test('skips an entry with no observation time rather than dating it now', () => {
     expect(
-      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { signals: signals() } }), t)
+      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { signals: signals() } }), t, NOW)
     ).toBeNull();
   });
 
@@ -114,11 +119,51 @@ describe('Claude quota from harvested rate-limit headers', () => {
     const bare = { 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.51' };
     const result = buildClaudeQuotaFromSignals(
       file({ 'claude-opus-5': { observed_at: '2026-09-12T12:56:15.424698-07:00', signals: bare } }),
-      t
+      t,
+      NOW
     );
 
     expect(result?.windows).toHaveLength(1);
     expect(result?.windows[0]).toMatchObject({ id: 'seven-day', usedPercent: 51, resetAtMs: null });
+  });
+
+  test('reads a window past its own reset as unknown, not as the old number', () => {
+    // The 5-hour window turns over several times in a day an idle seat spends not
+    // reporting, so its last reading describes a window that no longer exists.
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-fable-5-1': {
+          observed_at: '2026-09-11T12:55:53.316555-07:00',
+          signals: signals({ 'Anthropic-Ratelimit-Unified-5h-Utilization': '0.8' }),
+        },
+      }),
+      t,
+      (FIVE_HOUR_RESET + 60) * 1000
+    );
+
+    const fiveHour = result?.windows.find((window) => window.id === 'five-hour');
+    expect(fiveHour?.usedPercent).toBeNull();
+    // The row survives, and its reset label still says when it lapsed.
+    expect(fiveHour?.resetAtMs).toBe(FIVE_HOUR_RESET * 1000);
+    // The weekly windows have not lapsed, so they keep their figures.
+    expect(result?.windows.find((window) => window.id === 'seven-day')?.usedPercent).toBe(4);
+  });
+
+  test('keeps an undated window, which is idle rather than lapsed', () => {
+    // Anthropic dates a window nobody has opened since it rolled over as null; that
+    // is not the same as a window whose reset has passed.
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-opus-5': {
+          observed_at: '2026-09-12T12:56:15.424698-07:00',
+          signals: { 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.51' },
+        },
+      }),
+      t,
+      Number.MAX_SAFE_INTEGER
+    );
+
+    expect(result?.windows[0]?.usedPercent).toBe(51);
   });
 
   test('carries an over-limit reading through instead of clamping it away', () => {
@@ -131,7 +176,8 @@ describe('Claude quota from harvested rate-limit headers', () => {
           signals: signals({ 'Anthropic-Ratelimit-Unified-7d_oi-Utilization': '1.01' }),
         },
       }),
-      t
+      t,
+      NOW
     );
 
     expect(result?.windows.find((window) => window.id === 'seven-day-fable')?.usedPercent).toBe(101);

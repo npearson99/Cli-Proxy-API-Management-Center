@@ -146,7 +146,8 @@ export interface ClaudeSignalQuota {
  */
 export const buildClaudeQuotaFromSignals = (
   file: AuthFileItem,
-  t: TFunction
+  t: TFunction,
+  nowMs: number = Date.now()
 ): ClaudeSignalQuota | null => {
   const best = new Map<string, Reading>();
 
@@ -184,7 +185,14 @@ export const buildClaudeQuotaFromSignals = (
       id: spec.id,
       label: t(spec.labelKey),
       labelKey: spec.labelKey,
-      usedPercent,
+      // A reading describes the window it was taken in, and a window past its own
+      // reset has rolled over since — most visibly the 5-hour one, which turns over
+      // several times in a day an idle seat spends not reporting. Carrying the old
+      // number forward would state a busy seat as busy long after it emptied, so
+      // the row stays (its reset label already says how long ago that was) and only
+      // the figure reads unknown. The row this cannot touch is one Anthropic dated
+      // `null`, which is an idle window nobody has opened rather than a lapsed one.
+      usedPercent: resetAtMs !== null && resetAtMs <= nowMs ? null : usedPercent,
       resetLabel: formatQuotaResetTime(
         resetAtMs === null ? undefined : new Date(resetAtMs).toISOString()
       ),
