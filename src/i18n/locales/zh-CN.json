@@ -432,7 +432,8 @@
     "plan_max20": "Max 20x",
     "plan_team": "团队版",
     "observed_label": "观测于",
-    "observed_hint": "取自该账号自身流量的限流响应头，CLIProxyAPI 已记录，无需联网。点击刷新可拉取实时数值。"
+    "observed_hint": "取自该账号自身流量的限流响应头，CLIProxyAPI 已记录，无需联网。点击刷新可拉取实时数值。",
+    "token_expired": "该账号的 OAuth 令牌已过期，且本机无法刷新。Anthropic 对过期令牌返回的正是限流错误，但等待不会恢复——请从最近刷新过该账号的机器复制一份有效凭证（cpa-route revive）。"
   },
   "codex_quota": {
     "title": "Codex 额度",

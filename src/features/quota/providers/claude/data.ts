@@ -156,6 +156,28 @@ const resolveClaudePlanType = (profile: ClaudeProfileResponse | null): string | 
   return null;
 };
 
+const fetchClaudeProfile = (authIndex: string) =>
+  apiCallApi
+    .request({
+      authIndex,
+      method: 'GET',
+      url: CLAUDE_PROFILE_URL,
+      header: { ...CLAUDE_REQUEST_HEADERS },
+    })
+    .catch(() => null);
+
+/**
+ * Whether this credential's access token is expired rather than throttled.
+ *
+ * 401 only. A profile call that fails any other way says nothing about the token
+ * — a network error or a 5xx would otherwise convict a seat that is merely rate
+ * limited, which is the misreading this exists to prevent.
+ */
+const claudeTokenIsDead = async (authIndex: string): Promise<boolean> => {
+  const profile = await fetchClaudeProfile(authIndex);
+  return profile?.statusCode === 401;
+};
+
 const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<ClaudeQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -176,6 +198,19 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   });
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
+    // A dead OAuth token and a real rate limit are the same answer here: Anthropic
+    // rejects an expired token on the usage endpoint with 429 `rate_limit_error`,
+    // word for word what it sends a client that asked too often. Reading that as a
+    // limit sends you to wait out a window that is not running, when what the seat
+    // needs is a live credential copied from a box that still refreshes it.
+    //
+    // Retry-After does not separate them — a dead seat answered 457s here, inside
+    // the range a genuine limit uses. The profile endpoint does, in one extra
+    // request spent only on the failing card: a dead token 401s there while a
+    // rate-limited one still answers 200.
+    if (result.statusCode === 429 && (await claudeTokenIsDead(authIndex))) {
+      throw createStatusError(t('claude_quota.token_expired'), result.statusCode);
+    }
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
   }
 
@@ -185,14 +220,7 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   }
 
   const windows = buildClaudeQuotaWindows(payload, t);
-  const profileResult = await apiCallApi
-    .request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_PROFILE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    })
-    .catch(() => null);
+  const profileResult = await fetchClaudeProfile(authIndex);
   const planType =
     profileResult && profileResult.statusCode >= 200 && profileResult.statusCode < 300
       ? resolveClaudePlanType(

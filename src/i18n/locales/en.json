@@ -432,7 +432,8 @@
     "plan_max20": "Max 20x",
     "plan_team": "Team",
     "observed_label": "Measured",
-    "observed_hint": "Read from the rate-limit headers of this account's own traffic, which CLIProxyAPI already recorded. Refresh to fetch the live numbers."
+    "observed_hint": "Read from the rate-limit headers of this account's own traffic, which CLIProxyAPI already recorded. Refresh to fetch the live numbers.",
+    "token_expired": "This account's OAuth token has expired and cannot refresh on this machine. Anthropic reports an expired token here as a rate limit, but waiting will not clear it — copy a live credential from a machine that refreshed it more recently (cpa-route revive)."
   },
   "codex_quota": {
     "title": "Codex Quota",
