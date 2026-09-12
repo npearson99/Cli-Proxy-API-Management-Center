@@ -5,7 +5,8 @@
  * - loadingRef：并发批量加载去重；
  * - requestIdRef：被超越的响应直接丢弃；
  * - cacheGeneration：断线重连后过期请求不得写入新会话缓存。
- * 提交按 provider 分组进行 —— 快的提供商先落地，不等慢的。
+ * 每张卡各自落地 —— fetchQueue 会把一页凭证摊到几十秒里发，等最慢的一张回来
+ * 再统一提交，等于把已经到手的答案藏起来，中途断线更是整页卡在 loading。
  */
 
 import { useCallback, useRef, useState } from 'react';
@@ -14,16 +15,8 @@ import { captureQuotaCacheGeneration, commitIfQuotaCacheCurrent } from '@/stores
 import { getStatusFromError } from '@/utils/quota';
 import { quotaFetchQueueFor } from '../fetchQueue';
 import type { QuotaFileEntry } from '../logic';
-import { QUOTA_ADAPTERS, getQuotaSetter } from '../providers';
+import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from '../providers';
 import type { QuotaProviderType } from '../providers/types';
-
-interface BatchFetchResult {
-  name: string;
-  status: 'success' | 'error';
-  data?: unknown;
-  error?: string;
-  errorStatus?: number;
-}
 
 export function useQuotaBatchLoader() {
   const { t } = useTranslation();
@@ -63,41 +56,26 @@ export function useQuotaBatchLoader() {
               });
             });
 
+            const commitCard = (name: string, build: () => QuotaCardState) => {
+              if (requestId !== requestIdRef.current) return;
+              commitIfQuotaCacheCurrent(cacheGeneration, () => {
+                setQuota((prev) => ({ ...prev, [name]: build() }));
+              });
+            };
+
             const queue = quotaFetchQueueFor(type);
-            const results = await Promise.all(
-              entries.map(async ({ file }): Promise<BatchFetchResult> => {
+            await Promise.all(
+              entries.map(async ({ file }) => {
                 try {
                   const data = await queue.run(() => adapter.fetchQuota(file, t));
-                  return { name: file.name, status: 'success', data };
+                  commitCard(file.name, () => adapter.buildSuccessState(data));
                 } catch (err: unknown) {
                   const message = err instanceof Error ? err.message : t('common.unknown_error');
-                  return {
-                    name: file.name,
-                    status: 'error',
-                    error: message,
-                    errorStatus: getStatusFromError(err),
-                  };
+                  const status = getStatusFromError(err);
+                  commitCard(file.name, () => adapter.buildErrorState(message, status));
                 }
               })
             );
-
-            if (requestId !== requestIdRef.current) return;
-
-            commitIfQuotaCacheCurrent(cacheGeneration, () => {
-              setQuota((prev) => {
-                const nextState = { ...prev };
-                results.forEach((result) => {
-                  nextState[result.name] =
-                    result.status === 'success'
-                      ? adapter.buildSuccessState(result.data)
-                      : adapter.buildErrorState(
-                          result.error || t('common.unknown_error'),
-                          result.errorStatus
-                        );
-                });
-                return nextState;
-              });
-            });
           })
         );
       } finally {

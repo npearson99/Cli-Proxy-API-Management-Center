@@ -25,7 +25,7 @@ import {
   CLAUDE_FABLE_WINDOW_ID,
   CLAUDE_FABLE_WINDOW_LABEL_KEY,
   WEEKLY_PERIOD_HOURS,
-  formatQuotaResetTime,
+  formatUnixSeconds,
 } from '@/utils/quota';
 
 const SIGNAL_PREFIX = 'Anthropic-Ratelimit-Unified-';
@@ -73,6 +73,17 @@ const SCOPED_WEEKLY: readonly { matches: (model: string) => boolean; spec: Claim
   },
 ];
 
+/**
+ * Row order on the card, taken from the claim tables rather than from Map
+ * insertion, so the rows read the same whichever model happened to be observed
+ * first — and a claim added to SCOPED_WEEKLY lands after the account-wide rows
+ * instead of ahead of them, which an id missing from the list would do.
+ */
+const WINDOW_ORDER: readonly string[] = [
+  ...ACCOUNT_WIDE_CLAIMS.map((spec) => spec.id),
+  ...SCOPED_WEEKLY.map(({ spec }) => spec.id),
+];
+
 interface ModelQuotaEntry {
   observed_at?: unknown;
   signals?: Record<string, unknown>;
@@ -82,9 +93,13 @@ interface ModelQuotaEntry {
 interface Reading {
   spec: ClaimSpec;
   usedPercent: number;
-  resetAtMs: number | null;
+  /** Epoch seconds, the unit the header states, or null when it dates nothing. */
+  resetSeconds: number | null;
   observedAtMs: number;
 }
+
+/** Past this, a value is not an instant at all — `new Date` reports it invalid. */
+const MAX_EPOCH_SECONDS = 8.64e15 / 1000;
 
 const asSignalNumber = (value: unknown): number | null => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -107,6 +122,10 @@ const observedAtMs = (entry: ModelQuotaEntry): number | null => {
  * where `/api/oauth/usage` reports a percentage and an ISO instant. Converting
  * here rather than at the call site keeps every window in the one shape the rest
  * of the quota feature already reads, whichever source built it.
+ *
+ * A reset that is not a usable instant is dropped rather than carried: this runs
+ * inside the page's seeding effect, where one credential's malformed header
+ * costs the whole grid rather than one row.
  */
 const readClaim = (
   signals: Record<string, unknown>,
@@ -115,11 +134,11 @@ const readClaim = (
 ): Reading | null => {
   const fraction = asSignalNumber(signals[`${SIGNAL_PREFIX}${spec.claim}-Utilization`]);
   if (fraction === null) return null;
-  const resetSeconds = asSignalNumber(signals[`${SIGNAL_PREFIX}${spec.claim}-Reset`]);
+  const reset = asSignalNumber(signals[`${SIGNAL_PREFIX}${spec.claim}-Reset`]);
   return {
     spec,
     usedPercent: fraction * 100,
-    resetAtMs: resetSeconds === null ? null : resetSeconds * 1000,
+    resetSeconds: reset !== null && reset > 0 && reset <= MAX_EPOCH_SECONDS ? reset : null,
     observedAtMs: observed,
   };
 };
@@ -173,32 +192,30 @@ export const buildClaudeQuotaFromSignals = (
 
   if (best.size === 0) return null;
 
-  // Ordered by the claim table rather than by Map insertion, so the rows read the
-  // same whichever model happened to be observed first.
-  const order = [...ACCOUNT_WIDE_CLAIMS.map((spec) => spec.id), CLAUDE_FABLE_WINDOW_ID];
   const readings = [...best.values()].sort(
-    (a, b) => order.indexOf(a.spec.id) - order.indexOf(b.spec.id)
+    (a, b) => WINDOW_ORDER.indexOf(a.spec.id) - WINDOW_ORDER.indexOf(b.spec.id)
   );
 
   return {
-    windows: readings.map(({ spec, usedPercent, resetAtMs }) => ({
-      id: spec.id,
-      label: t(spec.labelKey),
-      labelKey: spec.labelKey,
-      // A reading describes the window it was taken in, and a window past its own
-      // reset has rolled over since — most visibly the 5-hour one, which turns over
-      // several times in a day an idle seat spends not reporting. Carrying the old
-      // number forward would state a busy seat as busy long after it emptied, so
-      // the row stays (its reset label already says how long ago that was) and only
-      // the figure reads unknown. The row this cannot touch is one Anthropic dated
-      // `null`, which is an idle window nobody has opened rather than a lapsed one.
-      usedPercent: resetAtMs !== null && resetAtMs <= nowMs ? null : usedPercent,
-      resetLabel: formatQuotaResetTime(
-        resetAtMs === null ? undefined : new Date(resetAtMs).toISOString()
-      ),
-      resetAtMs,
-      periodHours: spec.periodHours,
-    })),
+    windows: readings.map(({ spec, usedPercent, resetSeconds }) => {
+      const resetAtMs = resetSeconds === null ? null : resetSeconds * 1000;
+      return {
+        id: spec.id,
+        label: t(spec.labelKey),
+        labelKey: spec.labelKey,
+        // A reading describes the window it was taken in, and a window past its own
+        // reset has rolled over since — most visibly the 5-hour one, which turns over
+        // several times in a day an idle seat spends not reporting. Carrying the old
+        // number forward would state a busy seat as busy long after it emptied, so
+        // the row stays (its reset label already says how long ago that was) and only
+        // the figure reads unknown. The row this cannot touch is one Anthropic dated
+        // `null`, which is an idle window nobody has opened rather than a lapsed one.
+        usedPercent: resetAtMs !== null && resetAtMs <= nowMs ? null : usedPercent,
+        resetLabel: formatUnixSeconds(resetSeconds),
+        resetAtMs,
+        periodHours: spec.periodHours,
+      };
+    }),
     observedAtMs: Math.max(...readings.map((reading) => reading.observedAtMs)),
   };
 };

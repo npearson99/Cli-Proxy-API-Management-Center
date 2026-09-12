@@ -15,6 +15,38 @@ const harness = () => {
   };
 };
 
+/**
+ * Virtual timers: a sleep wakes only when the test advances the clock, so slots
+ * that overlap in time can be modelled — which the shared-advance harness above
+ * cannot do.
+ */
+const timeline = () => {
+  let clock = 0;
+  let pending: { at: number; resolve: () => void }[] = [];
+  const settle = async () => {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  };
+  return {
+    now: () => clock,
+    sleep: (ms: number) =>
+      new Promise<void>((resolve) => {
+        pending.push({ at: clock + ms, resolve });
+      }),
+    settle,
+    advanceTo: async (ms: number) => {
+      clock = ms;
+      for (;;) {
+        const due = pending.filter((timer) => timer.at <= clock);
+        if (due.length === 0) break;
+        pending = pending.filter((timer) => timer.at > clock);
+        due.forEach((timer) => timer.resolve());
+        await settle();
+      }
+      await settle();
+    },
+  };
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -131,6 +163,47 @@ describe('quota fetch queue', () => {
 
     await Promise.all([first, queued, latecomer]);
     expect(peak).toBe(1);
+  });
+
+  test('spaces the starts of two slots, not just of one', async () => {
+    // The gap is measured from the instant a start was *reserved*, not from the
+    // last one to actually begin. Otherwise a slot released while another task
+    // is waiting out the gap hands its successor that same wake-up instant, and
+    // the two go on the wire together — the burst the gap exists to prevent.
+    const tl = timeline();
+    const queue = createFetchQueue({
+      concurrency: 2,
+      minGapMs: 400,
+      now: tl.now,
+      sleep: tl.sleep,
+    });
+    const starts: number[] = [];
+    const gates = [deferred<void>(), deferred<void>(), deferred<void>()];
+
+    const runs = gates.map((gate) =>
+      queue.run(async () => {
+        starts.push(tl.now());
+        await gate.promise;
+      })
+    );
+
+    await tl.settle();
+    expect(starts).toEqual([0]);
+
+    // The first task finishes inside the gap, so the third takes its slot early.
+    await tl.advanceTo(50);
+    gates[0].resolve();
+    await tl.settle();
+
+    await tl.advanceTo(400);
+    expect(starts).toEqual([0, 400]);
+
+    await tl.advanceTo(800);
+    expect(starts).toEqual([0, 400, 800]);
+
+    gates[1].resolve();
+    gates[2].resolve();
+    await Promise.all(runs);
   });
 
   test('returns each task its own result, in the face of queueing', async () => {

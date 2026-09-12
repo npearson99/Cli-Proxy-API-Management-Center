@@ -12,6 +12,7 @@ import { isRuntimeOnlyAuthFile, type QuotaProviderType } from '@/features/authFi
 import { Button } from '@/components/ui/Button';
 import { IconRefreshCw } from '@/components/ui/icons';
 import { bindQuotaClasses } from '@/features/quota/types';
+import { quotaFetchQueueFor } from '@/features/quota/fetchQueue';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '@/features/quota/providers';
 import styles from './AuthFileQuota.module.scss';
 
@@ -68,7 +69,11 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
     }));
 
     try {
-      const data = await adapter.fetchQuota(file, t);
+      // Through the same per-provider queue the quota page uses: the budget being
+      // respected is the upstream limiter's, and it does not care which page a
+      // request came from — a card refreshed here while a batch drains there
+      // would otherwise land outside the cap that exists to stop the 429s.
+      const data = await quotaFetchQueueFor(adapter.type).run(() => adapter.fetchQuota(file, t));
       commitIfQuotaCacheCurrent(cacheGeneration, () => {
         updateQuotaState((prev) => ({
           ...prev,

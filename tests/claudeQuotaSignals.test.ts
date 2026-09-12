@@ -166,6 +166,32 @@ describe('Claude quota from harvested rate-limit headers', () => {
     expect(result?.windows[0]?.usedPercent).toBe(51);
   });
 
+  test('drops a reset that is not an instant rather than throwing out of the seed', () => {
+    // This runs inside the page's seeding effect, so a value `new Date` cannot
+    // represent must not reach a formatter that throws on it: one credential's
+    // malformed header would take the whole grid down, not one row.
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-opus-5': {
+          observed_at: '2026-09-12T12:56:15.424698-07:00',
+          signals: {
+            'Anthropic-Ratelimit-Unified-7d-Utilization': '0.42',
+            'Anthropic-Ratelimit-Unified-7d-Reset': '1e21',
+          },
+        },
+      }),
+      t,
+      Date.parse('2026-09-12T13:00:00-07:00')
+    );
+
+    expect(result?.windows[0]).toMatchObject({
+      id: 'seven-day',
+      usedPercent: 42,
+      resetAtMs: null,
+      resetLabel: '-',
+    });
+  });
+
   test('carries an over-limit reading through instead of clamping it away', () => {
     // Seats really do report 1.01: the weekly row is what marks a seat spent, so a
     // reading past 100% has to survive to the card that renders it.

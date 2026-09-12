@@ -56,11 +56,17 @@ export function createFetchQueue(options: FetchQueueOptions = {}): FetchQueue {
   const acquire = async () => {
     if (active >= concurrency) await new Promise<void>((resolve) => waiting.push(resolve));
     else active += 1;
-    // Inside the slot, so a task waiting out the gap still counts as running and
-    // cannot be joined by another that would start alongside it.
-    const wait = minGapMs - (now() - lastStart);
+    // The start instant is reserved before the wait rather than stamped after
+    // it. Measuring afterwards spaces each task only from the last one that
+    // *began*, so a slot released while another task is waiting out the gap
+    // hands its successor the same wake-up instant: both then go on the wire
+    // together, which is the burst the gap exists to prevent. Reserving makes
+    // the slots take distinct starts, and it stays inside the slot so a task
+    // waiting out its gap still counts as running.
+    const startAt = Math.max(now(), lastStart + minGapMs);
+    lastStart = startAt;
+    const wait = startAt - now();
     if (wait > 0) await sleep(wait);
-    lastStart = now();
   };
 
   return {
