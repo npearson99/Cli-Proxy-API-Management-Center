@@ -32,6 +32,7 @@ import {
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import type { QuotaProviderData } from '../types';
+import { buildClaudeQuotaFromSignals } from './signals';
 
 export type ClaudeQuotaData = {
   windows: ClaudeQuotaWindow[];
@@ -162,26 +163,17 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
     throw new Error(t('claude_quota.missing_auth_index'));
   }
 
-  const [usageResult, profileResult] = await Promise.allSettled([
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_USAGE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_PROFILE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
-  ]);
-
-  if (usageResult.status === 'rejected') {
-    throw usageResult.reason;
-  }
-
-  const result = usageResult.value;
+  // Usage first and alone, then the profile: a card holds one slot in the fetch
+  // queue, and asking for both at once would put two requests on the wire per
+  // slot — twice the burst the queue exists to bound, against the limiter that
+  // rejects bursts. Ordering them also spends nothing on the plan tier when the
+  // usage call has just been refused, which is the case that matters here.
+  const result = await apiCallApi.request({
+    authIndex,
+    method: 'GET',
+    url: CLAUDE_USAGE_URL,
+    header: { ...CLAUDE_REQUEST_HEADERS },
+  });
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -193,12 +185,18 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   }
 
   const windows = buildClaudeQuotaWindows(payload, t);
+  const profileResult = await apiCallApi
+    .request({
+      authIndex,
+      method: 'GET',
+      url: CLAUDE_PROFILE_URL,
+      header: { ...CLAUDE_REQUEST_HEADERS },
+    })
+    .catch(() => null);
   const planType =
-    profileResult.status === 'fulfilled' &&
-    profileResult.value.statusCode >= 200 &&
-    profileResult.value.statusCode < 300
+    profileResult && profileResult.statusCode >= 200 && profileResult.statusCode < 300
       ? resolveClaudePlanType(
-          parseClaudeProfilePayload(profileResult.value.body ?? profileResult.value.bodyText)
+          parseClaudeProfilePayload(profileResult.body ?? profileResult.bodyText)
         )
       : null;
 
@@ -210,6 +208,15 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
   i18nPrefix: 'claude_quota',
   filterFn: (file) => isClaudeFile(file) && !isDisabledAuthFile(file),
   fetchQuota: fetchClaudeQuota,
+  deriveQuota: (file, t) => {
+    const derived = buildClaudeQuotaFromSignals(file, t);
+    if (!derived) return null;
+    return {
+      status: 'success',
+      windows: derived.windows,
+      observedAtMs: derived.observedAtMs,
+    };
+  },
   storeSelector: (state) => state.claudeQuota,
   storeSetter: 'setClaudeQuota',
   buildLoadingState: () => ({ status: 'loading', windows: [] }),

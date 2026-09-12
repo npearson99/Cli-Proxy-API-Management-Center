@@ -430,7 +430,9 @@
     "plan_max": "Max",
     "plan_max5": "Max 5x",
     "plan_max20": "Max 20x",
-    "plan_team": "Team"
+    "plan_team": "Team",
+    "observed_label": "Measured",
+    "observed_hint": "Read from the rate-limit headers of this account's own traffic, which CLIProxyAPI already recorded. Refresh to fetch the live numbers."
   },
   "codex_quota": {
     "title": "Codex Quota",

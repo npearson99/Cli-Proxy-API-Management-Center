@@ -12,6 +12,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { captureQuotaCacheGeneration, commitIfQuotaCacheCurrent } from '@/stores';
 import { getStatusFromError } from '@/utils/quota';
+import { quotaFetchQueueFor } from '../fetchQueue';
 import type { QuotaFileEntry } from '../logic';
 import { QUOTA_ADAPTERS, getQuotaSetter } from '../providers';
 import type { QuotaProviderType } from '../providers/types';
@@ -62,10 +63,11 @@ export function useQuotaBatchLoader() {
               });
             });
 
+            const queue = quotaFetchQueueFor(type);
             const results = await Promise.all(
               entries.map(async ({ file }): Promise<BatchFetchResult> => {
                 try {
-                  const data = await adapter.fetchQuota(file, t);
+                  const data = await queue.run(() => adapter.fetchQuota(file, t));
                   return { name: file.name, status: 'success', data };
                 } catch (err: unknown) {
                   const message = err instanceof Error ? err.message : t('common.unknown_error');

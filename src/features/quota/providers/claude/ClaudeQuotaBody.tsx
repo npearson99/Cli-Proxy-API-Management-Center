@@ -5,7 +5,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ClaudeQuotaState } from '@/types';
-import { buildResetDisplay } from '@/utils/quota';
+import { buildResetDisplay, formatRelativeInstant } from '@/utils/quota';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
@@ -25,6 +25,15 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
 
   return (
     <>
+      {/* 只有「免费填充」的卡片带 observedAtMs：数字有多旧必须写在脸上，否则读者会当成实时值。 */}
+      {quota.observedAtMs !== undefined && (
+        <div className={classes.codexPlan} title={t('claude_quota.observed_hint')}>
+          <span className={classes.codexPlanLabel}>{t('claude_quota.observed_label')}</span>
+          <span className={classes.codexPlanValue}>
+            {formatRelativeInstant(quota.observedAtMs, now, i18n.resolvedLanguage)}
+          </span>
+        </div>
+      )}
       {planType && (
         <div className={classes.codexPlan}>
           <span className={classes.codexPlanLabel}>{t('claude_quota.plan_label')}</span>

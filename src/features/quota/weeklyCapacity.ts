@@ -18,8 +18,9 @@
  *   the figure tracks "how many typical accounts' worth" rather than a token
  *   count. Mixing tiers is normal here, so the UI says `measured` out loud
  *   rather than implying a precision the input does not have.
- * - It can only count what has been fetched. Quota loading on this page is
- *   click-to-fetch, so most cards are `idle` until the user asks. Unmeasured
+ * - It can only count what has been measured. Most cards arrive filled from the
+ *   auth-file listing's harvested rate-limit headers, but a seat that has never
+ *   served has none and stays `idle` until someone fetches it. Unmeasured
  *   credentials are reported as a separate count instead of being treated as
  *   full (which would invent capacity) or empty (which would invent scarcity).
  */

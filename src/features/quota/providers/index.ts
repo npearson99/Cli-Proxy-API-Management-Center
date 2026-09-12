@@ -27,6 +27,8 @@ export interface QuotaCardState {
   status: 'idle' | 'loading' | 'success' | 'error';
   error?: string;
   errorStatus?: number;
+  /** Set only on a card built by `deriveQuota`; see ClaudeQuotaState.observedAtMs. */
+  observedAtMs?: number;
 }
 
 export interface QuotaAdapter {
@@ -34,6 +36,7 @@ export interface QuotaAdapter {
   i18nPrefix: string;
   filterFn: (file: AuthFileItem) => boolean;
   fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
+  deriveQuota?: (file: AuthFileItem, t: TFunction) => QuotaCardState | null;
   resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
   canResetQuota?: (quota: QuotaCardState) => boolean;
   storeSelector: (state: QuotaStore) => Record<string, QuotaCardState>;

@@ -423,7 +423,9 @@
     "plan_max": "Max",
     "plan_max5": "Max 5x",
     "plan_max20": "Max 20x",
-    "plan_team": "Team"
+    "plan_team": "Team",
+    "observed_label": "Измерено",
+    "observed_hint": "Взято из заголовков лимитов собственного трафика этого аккаунта, уже записанных CLIProxyAPI. Обновите, чтобы получить актуальные значения."
   },
   "codex_quota": {
     "title": "Квота Codex",

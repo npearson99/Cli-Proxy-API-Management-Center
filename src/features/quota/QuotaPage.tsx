@@ -2,7 +2,8 @@
  * 额度查询页：提供商 tabs + 统一卡网格。
  *
  * 保留的行为契约（重设计不改）：
- * - 点击加载：卡片挂载为 idle，额度只在用户点击/刷新时才打上游；
+ * - 免费优先：卡片先用 auth-files 自带的限流表头填满（零上游请求），
+ *   只有用户点击/刷新才真正打上游，且一律经 fetchQueue 限流；
  * - cacheGeneration 会话隔离 + request-id 去重（见 useQuotaBatchLoader）；
  * - 文件列表变化后按 provider 剪枝额度缓存（已删文件不残留）；
  * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表。
@@ -42,6 +43,7 @@ import {
   sortQuotaEntries,
   type QuotaFileEntry,
 } from './logic';
+import { seedDerivedQuota } from './derivedSeed';
 import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
 import { summarizeWeeklyCapacity } from './weeklyCapacity';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
@@ -226,6 +228,16 @@ export function QuotaPage() {
       });
     });
   }, [entries, loading]);
+
+  // 免费填充：auth-files 自带的限流表头就是额度本身，先把卡片铺满，再决定要不要联网。
+  useEffect(() => {
+    if (loading) return;
+    QUOTA_TAB_ORDER.forEach((type) => {
+      const adapter = QUOTA_ADAPTERS[type];
+      if (!adapter.deriveQuota) return;
+      getQuotaSetter(adapter)((prev) => seedDerivedQuota(entries, prev, adapter, t) ?? prev);
+    });
+  }, [entries, loading, t]);
 
   /* ---------- 加载与操作 ---------- */
 

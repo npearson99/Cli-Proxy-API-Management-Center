@@ -1,0 +1,139 @@
+import { describe, expect, test } from 'bun:test';
+import type { TFunction } from 'i18next';
+import { buildClaudeQuotaFromSignals } from '@/features/quota/providers/claude/signals';
+import type { AuthFileItem } from '@/types';
+
+const t = ((key: string) => key) as TFunction;
+
+const FIVE_HOUR_RESET = 1789258200;
+const WEEKLY_RESET = 1789826400;
+
+const signals = (over: Record<string, string> = {}) => ({
+  'Anthropic-Ratelimit-Unified-5h-Reset': String(FIVE_HOUR_RESET),
+  'Anthropic-Ratelimit-Unified-5h-Status': 'allowed',
+  'Anthropic-Ratelimit-Unified-5h-Utilization': '0.06',
+  'Anthropic-Ratelimit-Unified-7d-Reset': String(WEEKLY_RESET),
+  'Anthropic-Ratelimit-Unified-7d-Status': 'allowed',
+  'Anthropic-Ratelimit-Unified-7d-Utilization': '0.04',
+  'Anthropic-Ratelimit-Unified-7d_oi-Reset': String(WEEKLY_RESET),
+  'Anthropic-Ratelimit-Unified-7d_oi-Utilization': '0.08',
+  ...over,
+});
+
+const file = (modelQuotas: unknown): AuthFileItem =>
+  ({ name: 'claude-seat.json', type: 'claude', model_quotas: modelQuotas }) as AuthFileItem;
+
+describe('Claude quota from harvested rate-limit headers', () => {
+  test('builds the 5h, account-wide and scoped weekly windows with no network call', () => {
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-fable-5-1': { observed_at: '2026-09-12T12:55:53.316555-07:00', signals: signals() },
+      }),
+      t
+    );
+
+    expect(result?.windows).toEqual([
+      {
+        id: 'five-hour',
+        label: 'claude_quota.five_hour',
+        labelKey: 'claude_quota.five_hour',
+        usedPercent: 6,
+        resetLabel: expect.any(String),
+        resetAtMs: FIVE_HOUR_RESET * 1000,
+        periodHours: 5,
+      },
+      {
+        id: 'seven-day',
+        label: 'claude_quota.seven_day',
+        labelKey: 'claude_quota.seven_day',
+        usedPercent: 4,
+        resetLabel: expect.any(String),
+        resetAtMs: WEEKLY_RESET * 1000,
+        periodHours: 24 * 7,
+      },
+      {
+        id: 'seven-day-fable',
+        label: 'claude_quota.seven_day_fable',
+        labelKey: 'claude_quota.seven_day_fable',
+        usedPercent: 8,
+        resetLabel: expect.any(String),
+        resetAtMs: WEEKLY_RESET * 1000,
+        periodHours: 24 * 7,
+      },
+    ]);
+    expect(result?.observedAtMs).toBe(Date.parse('2026-09-12T12:55:53.316555-07:00'));
+  });
+
+  test('takes each account-wide window from the model observed most recently', () => {
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-sonnet-5': {
+          observed_at: '2026-09-09T03:05:46.605197-07:00',
+          signals: signals({ 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.99' }),
+        },
+        'claude-opus-5': {
+          observed_at: '2026-09-12T12:56:15.424698-07:00',
+          signals: signals({ 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.04' }),
+        },
+      }),
+      t
+    );
+
+    const weekly = result?.windows.find((window) => window.id === 'seven-day');
+    expect(weekly?.usedPercent).toBe(4);
+  });
+
+  test('attributes the scoped weekly by the model key, not by the header name', () => {
+    // An opus entry reporting 7d_oi must not land in Fable's row: the header names
+    // the claim, and only the key it is filed under says whose claim it is.
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-opus-5': { observed_at: '2026-09-12T12:56:15.424698-07:00', signals: signals() },
+      }),
+      t
+    );
+
+    expect(result?.windows.map((window) => window.id)).toEqual(['five-hour', 'seven-day']);
+  });
+
+  test('reports a seat that has never served as having nothing to show', () => {
+    expect(buildClaudeQuotaFromSignals(file(undefined), t)).toBeNull();
+    expect(buildClaudeQuotaFromSignals(file({}), t)).toBeNull();
+    expect(
+      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { observed_at: '', signals: {} } }), t)
+    ).toBeNull();
+  });
+
+  test('skips an entry with no observation time rather than dating it now', () => {
+    expect(
+      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { signals: signals() } }), t)
+    ).toBeNull();
+  });
+
+  test('keeps a window whose reset the headers omitted', () => {
+    const bare = { 'Anthropic-Ratelimit-Unified-7d-Utilization': '0.51' };
+    const result = buildClaudeQuotaFromSignals(
+      file({ 'claude-opus-5': { observed_at: '2026-09-12T12:56:15.424698-07:00', signals: bare } }),
+      t
+    );
+
+    expect(result?.windows).toHaveLength(1);
+    expect(result?.windows[0]).toMatchObject({ id: 'seven-day', usedPercent: 51, resetAtMs: null });
+  });
+
+  test('carries an over-limit reading through instead of clamping it away', () => {
+    // Seats really do report 1.01: the weekly row is what marks a seat spent, so a
+    // reading past 100% has to survive to the card that renders it.
+    const result = buildClaudeQuotaFromSignals(
+      file({
+        'claude-fable-5-1': {
+          observed_at: '2026-09-12T12:55:53.316555-07:00',
+          signals: signals({ 'Anthropic-Ratelimit-Unified-7d_oi-Utilization': '1.01' }),
+        },
+      }),
+      t
+    );
+
+    expect(result?.windows.find((window) => window.id === 'seven-day-fable')?.usedPercent).toBe(101);
+  });
+});

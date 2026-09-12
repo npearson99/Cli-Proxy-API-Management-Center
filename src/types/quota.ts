@@ -173,6 +173,13 @@ export interface ClaudeQuotaState {
   planType?: string | null;
   error?: string;
   errorStatus?: number;
+  /**
+   * When the numbers were measured, for windows built from CPA's harvested
+   * rate-limit headers rather than fetched live. A seat reports headers only on
+   * requests it actually served, so this can be days old and the card has to say
+   * so. Absent on a live fetch, which is current by definition.
+   */
+  observedAtMs?: number;
 }
 
 // Quota state types

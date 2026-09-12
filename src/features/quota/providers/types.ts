@@ -39,6 +39,15 @@ export interface QuotaProviderData<TState, TData> {
   i18nPrefix: string;
   filterFn: (file: AuthFileItem) => boolean;
   fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<TData>;
+  /**
+   * A card's state built from what `auth-files` already carries, with no upstream
+   * request, or null when this credential carries none.
+   *
+   * Providers whose upstream answers with rate-limit headers get this for free:
+   * CPA files the newest set per credential, so the page can paint every card
+   * before deciding whether anything is worth fetching live.
+   */
+  deriveQuota?: (file: AuthFileItem, t: TFunction) => TState | null;
   resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;
   canResetQuota?: (quota: TState) => boolean;
   storeSelector: (state: QuotaStore) => Record<string, TState>;

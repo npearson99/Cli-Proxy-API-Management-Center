@@ -430,7 +430,9 @@
     "plan_max": "Max",
     "plan_max5": "Max 5x",
     "plan_max20": "Max 20x",
-    "plan_team": "團隊版"
+    "plan_team": "團隊版",
+    "observed_label": "觀測於",
+    "observed_hint": "取自該帳號自身流量的限流回應標頭，CLIProxyAPI 已記錄，無需連網。點擊重新整理可取得即時數值。"
   },
   "codex_quota": {
     "title": "Codex 配額",
