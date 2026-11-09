@@ -21,6 +21,7 @@ import {
 import { bindQuotaClasses } from '../types';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
 import { isQuotaRefreshDisabled, type QuotaFileEntry } from '../logic';
+import { resetButtonLabel } from '../resetCopy';
 import bodyStyles from './QuotaBody.module.scss';
 import styles from './QuotaCard.module.scss';
 
@@ -142,10 +143,10 @@ export function QuotaCard(props: QuotaCardProps) {
               className={styles.actionPill}
               onClick={onReset}
               disabled={!canRefresh || loading || resetting}
-              title={t('codex_quota.reset_button')}
+              title={resetButtonLabel(adapter, t)}
             >
               <IconRefreshCw size={13} className={resetting ? styles.spinning : undefined} />
-              {t('codex_quota.reset_button')}
+              {resetButtonLabel(adapter, t)}
             </button>
           )}
           <button

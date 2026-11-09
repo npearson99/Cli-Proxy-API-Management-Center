@@ -14,6 +14,12 @@ import { IconRefreshCw } from '@/components/ui/icons';
 import { bindQuotaClasses } from '@/features/quota/types';
 import { quotaFetchQueueFor } from '@/features/quota/fetchQueue';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '@/features/quota/providers';
+import {
+  buildResetConfirmation,
+  resetButtonLabel,
+  resetFailedNotice,
+  resetSuccessNotice,
+} from '@/features/quota/resetCopy';
 import styles from './AuthFileQuota.module.scss';
 
 /** 认证文件卡片外衣：紧凑额度样式绑定成类型化契约（缺键在模块初始化即抛）。 */
@@ -106,28 +112,30 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
 
     const resetQuota = adapter.resetQuota;
     if (!resetQuota) return;
+    const confirmation = buildResetConfirmation(adapter, file, quota, t);
+    if (!confirmation) return;
 
     showConfirmation({
-      title: t('codex_quota.reset_confirm_title'),
-      message: t('codex_quota.reset_confirm_message', { name: file.name }),
-      confirmText: t('codex_quota.reset_confirm_button'),
+      title: confirmation.title,
+      message: confirmation.message,
+      confirmText: confirmation.confirmText,
       variant: 'primary',
       onConfirm: async () => {
         const cacheGeneration = captureQuotaCacheGeneration();
         setResettingQuota(true);
         try {
-          const data = await resetQuota(file, t);
+          const data = await resetQuota(file, t, confirmation.option);
           commitIfQuotaCacheCurrent(cacheGeneration, () => {
             updateQuotaState((prev) => ({
               ...prev,
               [file.name]: adapter.buildSuccessState(data),
             }));
-            showNotification(t('codex_quota.reset_success', { name: file.name }), 'success');
+            showNotification(resetSuccessNotice(adapter, file, data, t), 'success');
           });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : t('common.unknown_error');
           commitIfQuotaCacheCurrent(cacheGeneration, () => {
-            showNotification(t('codex_quota.reset_failed', { name: file.name, message }), 'error');
+            showNotification(resetFailedNotice(adapter, file, message, t), 'error');
           });
         } finally {
           setResettingQuota(false);
@@ -138,7 +146,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
     adapter,
     disableControls,
     file,
-    quota?.status,
+    quota,
     resettingQuota,
     showConfirmation,
     showNotification,
@@ -160,11 +168,11 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
         onClick={() => resetQuotaForFile()}
         disabled={!canUseResetQuota}
         loading={resettingQuota}
-        title={t('codex_quota.reset_button')}
-        aria-label={t('codex_quota.reset_button')}
+        title={resetButtonLabel(adapter, t)}
+        aria-label={resetButtonLabel(adapter, t)}
       >
         {!resettingQuota && <IconRefreshCw size={14} />}
-        {t('codex_quota.reset_button')}
+        {resetButtonLabel(adapter, t)}
       </Button>
     ) : undefined;
   const quotaErrorMessage = resolveQuotaErrorMessage(

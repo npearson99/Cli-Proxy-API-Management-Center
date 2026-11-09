@@ -34,6 +34,14 @@ export interface QuotaStore {
   clearQuotaCache: () => void;
 }
 
+export interface QuotaResetDescription {
+  /** Handed back to `resetQuota`, so the claim spends what the dialog named. */
+  option?: string;
+  title: string;
+  message: string;
+  confirmText: string;
+}
+
 export interface QuotaProviderData<TState, TData> {
   type: QuotaProviderType;
   i18nPrefix: string;
@@ -48,8 +56,26 @@ export interface QuotaProviderData<TState, TData> {
    * before deciding whether anything is worth fetching live.
    */
   deriveQuota?: (file: AuthFileItem, t: TFunction) => TState | null;
-  resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;
+  /** `option` is what `describeReset` chose to spend, when the provider has a choice. */
+  resetQuota?: (file: AuthFileItem, t: TFunction, option?: string) => Promise<TData>;
   canResetQuota?: (quota: TState) => boolean;
+  /**
+   * The confirmation a reset asks for, naming what it is about to spend. Absent: the
+   * provider's `reset_confirm_*` keys with the file name. Null: nothing can be spent.
+   */
+  describeReset?: (file: AuthFileItem, quota: TState, t: TFunction) => QuotaResetDescription | null;
+  /** The success notice for a reset that returned `data`; absent: `reset_success`. */
+  describeResetSuccess?: (file: AuthFileItem, data: TData, t: TFunction) => string;
+  /**
+   * Data a card shows that neither the listing nor `deriveQuota` carries, fetched once
+   * per card through the provider's paced queue and merged into a card that
+   * `needsSupplement`. A live fetch reads the same data itself, so a fetched card
+   * never needs it.
+   */
+  supplementQuota?: (file: AuthFileItem, t: TFunction) => Promise<Partial<TState>>;
+  needsSupplement?: (quota: TState) => boolean;
+  /** Copies the supplement onto a newer seed replacing a card that already had it. */
+  carrySupplement?: (from: TState, to: TState) => TState;
   storeSelector: (state: QuotaStore) => Record<string, TState>;
   storeSetter: keyof QuotaStore;
   buildLoadingState: () => TState;

@@ -166,6 +166,58 @@ export interface ClaudeQuotaWindow {
   periodHours?: number | null;
 }
 
+// Claude banked resets (cedar_ember); parsed by utils/quota/claudeResets.
+
+export type ClaudeResetKind = 'session' | 'weekly' | 'fable' | 'full';
+
+/** Why a grant cannot be used right now; Claude Code's own reason codes. */
+export type ClaudeResetReason =
+  | 'cooldown'
+  | 'blocked_five_hour'
+  | 'blocked_seven_day'
+  | 'blocked_opus'
+  | 'blocked_sonnet'
+  | 'blocked_other'
+  | 'cannot_clear'
+  | 'needs_limit'
+  | 'unavailable';
+
+export interface ClaudeResetGrant {
+  id: string;
+  label: string;
+  resetsTotal: number;
+  resetsLeft: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  clears: string[];
+  paused: boolean;
+  usableNow: boolean;
+  useRequiresLimit: boolean;
+  percentUsed: Record<string, number>;
+  blocking: string[];
+  type: 'session' | 'weekly' | 'full' | null;
+  givesBackWeekly: boolean;
+  unavailableReason: ClaudeResetReason | null;
+}
+
+/** One seat's reset status, or why it could not be read. */
+export interface ClaudeResetInfo {
+  eligible: boolean;
+  ineligibleReason: string | null;
+  atLimit: boolean;
+  exhausted: string[];
+  grants: ClaudeResetGrant[];
+  nextGrantId: string | null;
+  cooldownUntil: string | null;
+  /**
+   * What Fable used of this week's shared weekly allowance, in percent: what a Fable
+   * reset would give back. Null when the payload carries no Fable share.
+   */
+  fableWeeklySharePercent: number | null;
+  /** Set when the status could not be read; the card still shows its windows. */
+  error: string;
+}
+
 export interface ClaudeQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: ClaudeQuotaWindow[];
@@ -180,6 +232,11 @@ export interface ClaudeQuotaState {
    * so. Absent on a live fetch, which is current by definition.
    */
   observedAtMs?: number;
+  /**
+   * Banked usage-limit resets. Undefined until read: a card painted from the listing
+   * gets them from a paced supplement fetch, a live fetch reads them itself.
+   */
+  resets?: ClaudeResetInfo;
 }
 
 // Quota state types

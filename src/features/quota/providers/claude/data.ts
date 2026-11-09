@@ -10,6 +10,8 @@ import type {
   ClaudeProfileResponse,
   ClaudeQuotaState,
   ClaudeQuotaWindow,
+  ClaudeResetGrant,
+  ClaudeResetInfo,
   ClaudeUsagePayload,
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
@@ -17,6 +19,22 @@ import {
   CLAUDE_PROFILE_URL,
   CLAUDE_USAGE_URL,
   CLAUDE_REQUEST_HEADERS,
+  CLAUDE_RESET_HEADERS,
+  CLAUDE_RESET_PROGRAM,
+  CLAUDE_RESET_STATUS_URL,
+  claudeGrantGivesNothingBack,
+  claudeResetClaimUrl,
+  claudeResetKind,
+  claudeResetReason,
+  claudeResetReasonKey,
+  classifyClaudeResetClaim,
+  formatInstantShort,
+  getStatusFromError,
+  isClaudeOrganizationUuid,
+  isUsableClaudeGrant,
+  parseClaudeResetInfo,
+  parseIsoToMs,
+  pickClaudeResetGrant,
   CLAUDE_FABLE_WINDOW_ID,
   CLAUDE_FABLE_WINDOW_LABEL_KEY,
   CLAUDE_USAGE_WINDOW_KEYS,
@@ -31,13 +49,16 @@ import {
   isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
-import type { QuotaProviderData } from '../types';
+import type { QuotaProviderData, QuotaResetDescription } from '../types';
 import { buildClaudeQuotaFromSignals } from './signals';
 
 export type ClaudeQuotaData = {
   windows: ClaudeQuotaWindow[];
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
+  resets?: ClaudeResetInfo;
+  /** Set by a reset that spent a grant: what it refilled, for the notice. */
+  claimed?: { cleared: string[]; resetsLeft: number | null };
 };
 
 const findFableUsageLimit = (payload: ClaudeUsagePayload) => {
@@ -178,6 +199,32 @@ const claudeTokenIsDead = async (authIndex: string): Promise<boolean> => {
   return profile?.statusCode === 401;
 };
 
+/**
+ * The seat's banked resets. Never throws: a card whose windows loaded must not fail
+ * because the reset program could not be read, so the failure rides in `error`.
+ */
+export const fetchClaudeResets = async (
+  authIndex: string,
+  t: TFunction
+): Promise<ClaudeResetInfo> => {
+  const invalid = t('claude_quota.resets_invalid_payload');
+  try {
+    const result = await apiCallApi.request({
+      authIndex,
+      method: 'GET',
+      url: CLAUDE_RESET_STATUS_URL,
+      header: { ...CLAUDE_RESET_HEADERS },
+    });
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      return { ...parseClaudeResetInfo(null, ''), error: getApiCallErrorMessage(result) };
+    }
+    return parseClaudeResetInfo(result.body ?? result.bodyText, invalid);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : t('common.unknown_error');
+    return { ...parseClaudeResetInfo(null, ''), error: message };
+  }
+};
+
 const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<ClaudeQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -228,14 +275,226 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
         )
       : null;
 
-  return { windows, extraUsage: payload.extra_usage, planType };
+  // Third and last, alone like the other two: the reset grants live on a separate
+  // URL so the canonical usage read above stays the one the proxy reconciles on.
+  const resets = await fetchClaudeResets(authIndex, t);
+
+  return { windows, extraUsage: payload.extra_usage, planType, resets };
 };
+
+const resolveAuthIndex = (file: AuthFileItem, t: TFunction): string => {
+  const authIndex = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+  if (!authIndex) throw new Error(t('claude_quota.missing_auth_index'));
+  return authIndex;
+};
+
+const resetKindLabel = (grant: ClaudeResetGrant, t: TFunction): string =>
+  t(`claude_quota.reset_kind_${claudeResetKind(grant)}`);
+
+const formatDeadline = (grant: ClaudeResetGrant): string => {
+  const ms = parseIsoToMs(grant.endsAt);
+  return ms === null ? '-' : formatInstantShort(ms);
+};
+
+/** Why `grant` cannot be spent now, in Claude Code's words. */
+export const describeClaudeResetReason = (
+  grant: ClaudeResetGrant,
+  info: ClaudeResetInfo,
+  t: TFunction
+): string => t(claudeResetReasonKey(grant, claudeResetReason(grant, info)));
+
+const describeShare = (info: ClaudeResetInfo, t: TFunction): string =>
+  info.fableWeeklySharePercent === null
+    ? t('claude_quota.reset_share_unknown')
+    : `${Math.round(info.fableWeeklySharePercent)}%`;
+
+const describeClears = (grant: ClaudeResetGrant): string =>
+  grant.clears
+    .map((window) =>
+      grant.percentUsed[window] === undefined ? window : `${window} (${grant.percentUsed[window]}%)`
+    )
+    .join(', ') || '-';
+
+const describeClaudeReset = (
+  file: AuthFileItem,
+  quota: ClaudeQuotaState,
+  t: TFunction
+): QuotaResetDescription | null => {
+  const info = quota.resets;
+  const grant = pickClaudeResetGrant(info);
+  if (!info || !grant) return null;
+  const kind = resetKindLabel(grant, t);
+  const params = {
+    name: file.name,
+    kind,
+    label: grant.label || grant.id,
+    left: grant.resetsLeft,
+    deadline: formatDeadline(grant),
+    share: describeShare(info, t),
+    clears: describeClears(grant),
+  };
+  const message = [
+    t(
+      grant.givesBackWeekly
+        ? 'claude_quota.reset_confirm_message_fable'
+        : 'claude_quota.reset_confirm_message',
+      params
+    ),
+  ];
+  // `cpa-route claude reset` refuses this without --force; the dialog is the --force,
+  // so it says what the CLI would have.
+  if (!info.atLimit) {
+    message.push(
+      t(
+        grant.givesBackWeekly
+          ? 'claude_quota.reset_confirm_not_at_limit_fable'
+          : 'claude_quota.reset_confirm_not_at_limit',
+        params
+      )
+    );
+  }
+  return {
+    option: grant.id,
+    title: t('claude_quota.reset_confirm_title', { kind }),
+    message: message.join(' '),
+    confirmText: t('claude_quota.reset_confirm_button', { kind }),
+  };
+};
+
+const notClaimed = (t: TFunction, message: string) =>
+  new Error(t('claude_quota.reset_not_claimed', { message }));
+
+/**
+ * Spends one banked reset: the grant the confirmation named, re-read fresh first.
+ *
+ * Everything before the POST provably spends nothing and says so. The POST itself is
+ * idempotent on its request id, so an answer that leaves the outcome open names the
+ * id and the `cpa-route` command that retries it without risking a second reset.
+ */
+export const claimClaudeReset = async (
+  file: AuthFileItem,
+  t: TFunction,
+  grantId?: string
+): Promise<{ cleared: string[]; resetsLeft: number | null }> => {
+  const authIndex = resolveAuthIndex(file, t);
+  const info = await fetchClaudeResets(authIndex, t);
+  if (info.error) throw notClaimed(t, info.error);
+  if (!info.eligible) {
+    throw notClaimed(
+      t,
+      t('claude_quota.resets_ineligible', { reason: info.ineligibleReason ?? '-' })
+    );
+  }
+  const grant = grantId
+    ? info.grants.find((candidate) => candidate.id === grantId)
+    : pickClaudeResetGrant(info);
+  if (!grant) throw notClaimed(t, t('claude_quota.reset_grant_gone'));
+  if (!isUsableClaudeGrant(grant)) {
+    throw notClaimed(t, describeClaudeResetReason(grant, info, t));
+  }
+  // Fable may have spent nothing since the dialog opened: re-checked on the fresh read.
+  if (claudeGrantGivesNothingBack(grant, info)) {
+    throw notClaimed(t, t('claude_quota.reset_reason_nothing_to_give_back'));
+  }
+
+  const profile = await apiCallApi
+    .request({
+      authIndex,
+      method: 'GET',
+      url: CLAUDE_PROFILE_URL,
+      header: { ...CLAUDE_RESET_HEADERS },
+    })
+    .catch(() => null);
+  const organizationUuid =
+    profile && profile.statusCode >= 200 && profile.statusCode < 300
+      ? parseClaudeProfilePayload(profile.body ?? profile.bodyText)?.organization?.uuid
+      : undefined;
+  // Spliced into the claim URL's path, so only a well-formed UUID goes through.
+  if (!isClaudeOrganizationUuid(organizationUuid)) {
+    throw notClaimed(t, t('claude_quota.reset_no_organization'));
+  }
+
+  const requestId = crypto.randomUUID();
+  const unknown = (detail: string) =>
+    new Error(
+      t('claude_quota.reset_outcome_unknown', {
+        detail,
+        requestId,
+        command: `cpa-route claude reset ${file.name} --grant ${grant.id} --request-id ${requestId}`,
+      })
+    );
+  let result;
+  try {
+    result = await apiCallApi.request({
+      authIndex,
+      method: 'POST',
+      url: claudeResetClaimUrl(organizationUuid),
+      header: { ...CLAUDE_RESET_HEADERS, 'Content-Type': 'application/json' },
+      data: JSON.stringify({
+        program: CLAUDE_RESET_PROGRAM,
+        grant_id: grant.id,
+        request_id: requestId,
+      }),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : t('common.unknown_error');
+    // The management API refusing the call (a 4xx) answers before anything is sent;
+    // anything else may have reached Anthropic.
+    const status = getStatusFromError(err);
+    if (status !== undefined && status >= 400 && status < 500) throw notClaimed(t, message);
+    throw unknown(message);
+  }
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw unknown(getApiCallErrorMessage(result));
+  }
+  const claim = classifyClaudeResetClaim(result.body ?? result.bodyText);
+  if (claim.outcome === 'reset') return { cleared: claim.cleared, resetsLeft: claim.resetsLeft };
+  const detail = [claim.result || '-', claim.reason].filter(Boolean).join(': ');
+  if (claim.outcome === 'not_spent') throw notClaimed(t, detail);
+  throw unknown(detail);
+};
+
+const resetClaudeQuota = async (
+  file: AuthFileItem,
+  t: TFunction,
+  option?: string
+): Promise<ClaudeQuotaData> => {
+  const claimed = await claimClaudeReset(file, t, option);
+  // Read back live: the canonical usage GET is also what makes the proxy reconcile
+  // the seat's routing, so the refilled window serves without a manual reset-quota.
+  const data = await fetchClaudeQuota(file, t);
+  return { ...data, claimed };
+};
+
+const describeClaudeResetSuccess = (
+  file: AuthFileItem,
+  data: ClaudeQuotaData,
+  t: TFunction
+): string =>
+  data.claimed
+    ? t('claude_quota.reset_success_detail', {
+        name: file.name,
+        cleared: data.claimed.cleared.join(', ') || '-',
+        left: data.claimed.resetsLeft ?? '-',
+      })
+    : t('claude_quota.reset_success', { name: file.name });
 
 export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData> = {
   type: 'claude',
   i18nPrefix: 'claude_quota',
   filterFn: (file) => isClaudeFile(file) && !isDisabledAuthFile(file),
   fetchQuota: fetchClaudeQuota,
+  resetQuota: resetClaudeQuota,
+  canResetQuota: (quota) => pickClaudeResetGrant(quota.resets) !== null,
+  describeReset: describeClaudeReset,
+  describeResetSuccess: describeClaudeResetSuccess,
+  // A card painted from the listing has no grants; one paced read per seat adds them.
+  supplementQuota: async (file, t) => ({
+    resets: await fetchClaudeResets(resolveAuthIndex(file, t), t),
+  }),
+  needsSupplement: (quota) => quota.status === 'success' && quota.resets === undefined,
+  carrySupplement: (from, to) =>
+    to.resets === undefined && from.resets !== undefined ? { ...to, resets: from.resets } : to,
   deriveQuota: (file, t) => {
     const derived = buildClaudeQuotaFromSignals(file, t);
     if (!derived) return null;
@@ -253,6 +512,7 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
     windows: data.windows,
     extraUsage: data.extraUsage,
     planType: data.planType,
+    resets: data.resets,
   }),
   buildErrorState: (message, status) => ({
     status: 'error',

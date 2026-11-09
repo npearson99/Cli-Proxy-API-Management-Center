@@ -306,6 +306,33 @@ button.quotaMessageAction {
   overflow-wrap: anywhere;
 }
 
+/* Claude banked resets reuse the reset-credit rows; each grant adds its label and a status line. */
+.claudeResetGrantMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.claudeResetGrantNote {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.claudeResetGrantStatus {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.claudeResetGrantStatusUsable {
+  color: var(--success-color);
+  font-weight: 600;
+}
+
 @include mobile {
   .quotaRowHeader {
     flex-direction: column;

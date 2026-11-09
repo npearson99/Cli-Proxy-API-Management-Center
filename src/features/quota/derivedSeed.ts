@@ -20,8 +20,7 @@ import type { QuotaFileEntry } from './logic';
 import type { QuotaAdapter, QuotaCardState } from './providers';
 
 /** A card built by `deriveQuota` rather than fetched; see QuotaCardState.observedAtMs. */
-const isSeeded = (state: QuotaCardState | undefined): boolean =>
-  state?.observedAtMs !== undefined;
+const isSeeded = (state: QuotaCardState | undefined): boolean => state?.observedAtMs !== undefined;
 
 const supersedes = (next: QuotaCardState, current: QuotaCardState | undefined): boolean => {
   if (!current || current.status === 'idle') return true;
@@ -50,9 +49,13 @@ export function seedDerivedQuota(
     if (type !== adapter.type) continue;
     const derived = adapter.deriveQuota(file, t);
     if (!derived) continue;
-    if (!supersedes(derived, current[file.name])) continue;
+    const previous = current[file.name];
+    if (!supersedes(derived, previous)) continue;
     next = next ?? { ...current };
-    next[file.name] = derived;
+    // A newer seed must not drop what a supplement already added to the older one:
+    // the supplement runs once per card, so dropping it would leave the card without.
+    next[file.name] =
+      previous && adapter.carrySupplement ? adapter.carrySupplement(previous, derived) : derived;
   }
   return next;
 }

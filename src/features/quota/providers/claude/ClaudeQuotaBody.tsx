@@ -1,16 +1,126 @@
 /**
- * Claude 额度渲染体：套餐/额外用量 chip 行 + 用量窗口水位条。
+ * Claude 额度渲染体：套餐/额外用量 chip 行 + 储备重置明细 + 用量窗口水位条。
  */
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ClaudeQuotaState } from '@/types';
-import { buildResetDisplay, formatRelativeInstant } from '@/utils/quota';
+import type { ClaudeQuotaState, ClaudeResetInfo } from '@/types';
+import {
+  buildResetDisplay,
+  claudeGrantGivesNothingBack,
+  claudeResetKind,
+  formatInstantShort,
+  formatRelativeInstant,
+  isClaimableClaudeGrant,
+  parseIsoToMs,
+} from '@/utils/quota';
+import { resolveTimeZoneLabel } from '@/utils/time/timezone';
+import { describeClaudeResetReason } from './data';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
 import { collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
-import type { QuotaBodyProps } from '../../types';
+import type { QuotaBodyProps, QuotaClassMap } from '../../types';
+
+// Kinds read lower-case inside a sentence ("Use a weekly reset?"), so a row that
+// starts with one capitalizes it here rather than in every locale.
+const capitalize = (text: string, locale?: string) =>
+  text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+
+/** One row per grant: kind and count, use-by date, then usable-now or why not. */
+function ClaudeResetGrants({
+  resets,
+  classes,
+}: {
+  resets: ClaudeResetInfo;
+  classes: QuotaClassMap;
+}) {
+  const { t, i18n } = useTranslation();
+  const now = useNow();
+  const locale = i18n.resolvedLanguage;
+
+  if (resets.error) {
+    return (
+      <div className={classes.codexResetCreditsError}>
+        {t('claude_quota.resets_failed', { message: resets.error })}
+      </div>
+    );
+  }
+  if (!resets.eligible) {
+    return (
+      <div className={classes.codexResetCreditsError}>
+        {t('claude_quota.resets_ineligible', { reason: resets.ineligibleReason ?? '-' })}
+      </div>
+    );
+  }
+  if (resets.grants.length === 0) return null;
+
+  return (
+    <div className={classes.codexResetCredits}>
+      <div className={classes.codexResetCreditsTitle}>
+        {t('claude_quota.resets_title', { timezone: resolveTimeZoneLabel() })}
+      </div>
+      {resets.grants.map((grant) => {
+        const endsAtMs = parseIsoToMs(grant.endsAt);
+        const deadline = buildResetDisplay(
+          endsAtMs === null ? grant.endsAt : formatInstantShort(endsAtMs),
+          endsAtMs,
+          now,
+          locale
+        );
+        const claimable = isClaimableClaudeGrant(grant, resets);
+        let status: string;
+        if (claimable) {
+          status = grant.givesBackWeekly
+            ? t('claude_quota.reset_usable_fable', {
+                share:
+                  resets.fableWeeklySharePercent === null
+                    ? t('claude_quota.reset_share_unknown')
+                    : `${Math.round(resets.fableWeeklySharePercent)}%`,
+              })
+            : t('claude_quota.reset_usable');
+        } else if (grant.paused) {
+          status = t('claude_quota.reset_paused');
+        } else if (grant.resetsLeft === 0) {
+          status = t('claude_quota.reset_none_left');
+        } else if (claudeGrantGivesNothingBack(grant, resets)) {
+          // Usable, but a Fable reset at a 0% share returns nothing; not offered.
+          status = t('claude_quota.reset_reason_nothing_to_give_back');
+        } else {
+          status = describeClaudeResetReason(grant, resets, t);
+        }
+        return (
+          <div key={grant.id} className={classes.codexResetCreditRow} title={grant.id}>
+            <span className={classes.claudeResetGrantMain}>
+              <span className={classes.codexResetCreditLabel}>
+                {capitalize(
+                  t('claude_quota.reset_grant_label', {
+                    kind: t(`claude_quota.reset_kind_${claudeResetKind(grant)}`),
+                    left: grant.resetsLeft,
+                  }),
+                  locale
+                )}
+              </span>
+              {grant.label && <span className={classes.claudeResetGrantNote}>{grant.label}</span>}
+              <span
+                className={
+                  claimable
+                    ? `${classes.claudeResetGrantStatus} ${classes.claudeResetGrantStatusUsable}`
+                    : classes.claudeResetGrantStatus
+                }
+              >
+                {status}
+              </span>
+            </span>
+            <span className={classes.codexResetCreditTime}>
+              {deadline && <QuotaResetLabel display={deadline} classes={classes} />}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaState>) {
   const { t, i18n } = useTranslation();
@@ -48,6 +158,7 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
           </span>
         </div>
       )}
+      {quota.resets && <ClaudeResetGrants resets={quota.resets} classes={classes} />}
       {windows.length === 0 ? (
         <div className={classes.quotaMessage}>{t('claude_quota.empty_windows')}</div>
       ) : (

@@ -35,6 +35,11 @@ export interface QuotaClassMap {
   codexResetCreditLabel: string;
   codexResetCreditTime: string;
   codexResetCreditsError: string;
+  // Claude 储备重置（行容器沿用 codexResetCredit*，这里只补状态行）
+  claudeResetGrantMain: string;
+  claudeResetGrantNote: string;
+  claudeResetGrantStatus: string;
+  claudeResetGrantStatusUsable: string;
   // Antigravity 分组
   antigravityQuotaGroup: string;
   antigravityQuotaGroupHeader: string;
@@ -72,6 +77,10 @@ export const QUOTA_CLASS_KEYS: readonly (keyof QuotaClassMap)[] = [
   'codexResetCreditLabel',
   'codexResetCreditTime',
   'codexResetCreditsError',
+  'claudeResetGrantMain',
+  'claudeResetGrantNote',
+  'claudeResetGrantStatus',
+  'claudeResetGrantStatusUsable',
   'antigravityQuotaGroup',
   'antigravityQuotaGroupHeader',
   'antigravityQuotaGroupTitle',

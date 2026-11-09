@@ -107,6 +107,31 @@ export const CLAUDE_REQUEST_HEADERS = {
   'anthropic-beta': 'oauth-2025-04-20',
 };
 
+/**
+ * The usage endpoint with the reset program's status block. It is a separate request
+ * from CLAUDE_USAGE_URL on purpose: the fork's server-side quota refresh reconciles
+ * routing only on a GET of that exact URL, so the canonical read stays as it is.
+ */
+export const CLAUDE_RESET_STATUS_URL = `${CLAUDE_USAGE_URL}?cedar_ember=1&skip_spend=1`;
+export const CLAUDE_RESET_PROGRAM = 'cedar_ember';
+export const claudeResetClaimUrl = (organizationUuid: string) =>
+  `https://api.anthropic.com/api/organizations/${organizationUuid}/reset_rate_limits`;
+
+/**
+ * Anthropic reports reset grants only to a caller that identifies as the Claude Code
+ * CLI, and gates them on its version: 2.1.220 reads `ineligible_reason: cli_version`.
+ * 2.1.321 is the release that shipped Fable 5.2 and its launch resets (2026-11-09).
+ */
+export const CLAUDE_RESET_HEADERS = {
+  Authorization: 'Bearer $TOKEN$',
+  'anthropic-beta': 'oauth-2025-04-20',
+  'anthropic-version': '2023-06-01',
+  'anthropic-client-platform': 'claude_code_cli',
+  'x-app': 'cli',
+  Accept: 'application/json',
+  'User-Agent': 'claude-cli/2.1.321 (external, cli)',
+};
+
 /** The window that governs a Claude seat's overall weekly capacity. */
 export const CLAUDE_ACCOUNT_WIDE_WINDOW_ID = 'seven-day';
 /** Fable's own weekly window, built from `limits[]` or the legacy `iguana_necktie` key. */

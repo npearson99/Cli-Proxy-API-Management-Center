@@ -1,5 +1,5 @@
 /**
- * 单卡额度操作：刷新 + Codex 重置积分。
+ * 单卡额度操作：刷新 + 重置（Codex 重置积分、Claude 储备重置）。
  * 流程 1:1 移植旧 QuotaSection（confirm modal、resetting 再入守卫、
  * generation-guarded commit、成功/失败通知），仅把 config 换成 adapter。
  */
@@ -14,6 +14,7 @@ import {
 import type { AuthFileItem } from '@/types';
 import { getStatusFromError } from '@/utils/quota';
 import { quotaFetchQueueFor } from '../fetchQueue';
+import { buildResetConfirmation, resetFailedNotice, resetSuccessNotice } from '../resetCopy';
 import { getQuotaMap, getQuotaSetter, type QuotaAdapter, type QuotaCardState } from '../providers';
 
 const getQuotaState = (adapter: QuotaAdapter, name: string): QuotaCardState | undefined =>
@@ -72,32 +73,36 @@ export function useQuotaActions(disableControls: boolean) {
       if (disableControls || file.disabled) return;
       if (getQuotaState(adapter, file.name)?.status === 'loading') return;
       if (resettingQuotaName === file.name) return;
+      const confirmation = buildResetConfirmation(
+        adapter,
+        file,
+        getQuotaState(adapter, file.name),
+        t
+      );
+      if (!confirmation) return;
 
       showConfirmation({
-        title: t('codex_quota.reset_confirm_title'),
-        message: t('codex_quota.reset_confirm_message', { name: file.name }),
-        confirmText: t('codex_quota.reset_confirm_button'),
+        title: confirmation.title,
+        message: confirmation.message,
+        confirmText: confirmation.confirmText,
         variant: 'primary',
         onConfirm: async () => {
           const cacheGeneration = captureQuotaCacheGeneration();
           const setQuota = getQuotaSetter(adapter);
           setResettingQuotaName(file.name);
           try {
-            const data = await resetQuotaFn(file, t);
+            const data = await resetQuotaFn(file, t, confirmation.option);
             commitIfQuotaCacheCurrent(cacheGeneration, () => {
               setQuota((prev) => ({
                 ...prev,
                 [file.name]: adapter.buildSuccessState(data),
               }));
-              showNotification(t('codex_quota.reset_success', { name: file.name }), 'success');
+              showNotification(resetSuccessNotice(adapter, file, data, t), 'success');
             });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : t('common.unknown_error');
             commitIfQuotaCacheCurrent(cacheGeneration, () => {
-              showNotification(
-                t('codex_quota.reset_failed', { name: file.name, message }),
-                'error'
-              );
+              showNotification(resetFailedNotice(adapter, file, message, t), 'error');
             });
           } finally {
             setResettingQuotaName((current) => (current === file.name ? null : current));

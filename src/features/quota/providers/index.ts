@@ -10,7 +10,7 @@ import type { TFunction } from 'i18next';
 import { useQuotaStore } from '@/stores';
 import type { AuthFileItem } from '@/types';
 import type { QuotaBodyProps } from '../types';
-import type { QuotaProviderType, QuotaStore } from './types';
+import type { QuotaProviderType, QuotaResetDescription, QuotaStore } from './types';
 import { ANTIGRAVITY_CONFIG } from './antigravity/data';
 import { AntigravityQuotaBody } from './antigravity/AntigravityQuotaBody';
 import { CLAUDE_CONFIG } from './claude/data';
@@ -37,8 +37,17 @@ export interface QuotaAdapter {
   filterFn: (file: AuthFileItem) => boolean;
   fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
   deriveQuota?: (file: AuthFileItem, t: TFunction) => QuotaCardState | null;
-  resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
+  resetQuota?: (file: AuthFileItem, t: TFunction, option?: string) => Promise<unknown>;
   canResetQuota?: (quota: QuotaCardState) => boolean;
+  describeReset?: (
+    file: AuthFileItem,
+    quota: QuotaCardState,
+    t: TFunction
+  ) => QuotaResetDescription | null;
+  describeResetSuccess?: (file: AuthFileItem, data: unknown, t: TFunction) => string;
+  supplementQuota?: (file: AuthFileItem, t: TFunction) => Promise<Partial<QuotaCardState>>;
+  needsSupplement?: (quota: QuotaCardState) => boolean;
+  carrySupplement?: (from: QuotaCardState, to: QuotaCardState) => QuotaCardState;
   storeSelector: (state: QuotaStore) => Record<string, QuotaCardState>;
   storeSetter: keyof QuotaStore;
   buildLoadingState: () => QuotaCardState;
