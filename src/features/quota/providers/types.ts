@@ -34,15 +34,18 @@ export interface QuotaStore {
   clearQuotaCache: () => void;
 }
 
-export interface QuotaResetDescription {
-  /** Handed back to `resetQuota`, so the claim spends what the dialog named. */
-  option?: string;
+export interface QuotaResetDescription<TOption = unknown> {
+  /**
+   * Handed back to `resetQuota`, so the claim spends what the dialog named, on the
+   * premises the dialog stated.
+   */
+  option?: TOption;
   title: string;
   message: string;
   confirmText: string;
 }
 
-export interface QuotaProviderData<TState, TData> {
+export interface QuotaProviderData<TState, TData, TOption = never> {
   type: QuotaProviderType;
   i18nPrefix: string;
   filterFn: (file: AuthFileItem) => boolean;
@@ -57,13 +60,17 @@ export interface QuotaProviderData<TState, TData> {
    */
   deriveQuota?: (file: AuthFileItem, t: TFunction) => TState | null;
   /** `option` is what `describeReset` chose to spend, when the provider has a choice. */
-  resetQuota?: (file: AuthFileItem, t: TFunction, option?: string) => Promise<TData>;
+  resetQuota?: (file: AuthFileItem, t: TFunction, option?: TOption) => Promise<TData>;
   canResetQuota?: (quota: TState) => boolean;
   /**
    * The confirmation a reset asks for, naming what it is about to spend. Absent: the
    * provider's `reset_confirm_*` keys with the file name. Null: nothing can be spent.
    */
-  describeReset?: (file: AuthFileItem, quota: TState, t: TFunction) => QuotaResetDescription | null;
+  describeReset?: (
+    file: AuthFileItem,
+    quota: TState,
+    t: TFunction
+  ) => QuotaResetDescription<TOption> | null;
   /** The success notice for a reset that returned `data`; absent: `reset_success`. */
   describeResetSuccess?: (file: AuthFileItem, data: TData, t: TFunction) => string;
   /**

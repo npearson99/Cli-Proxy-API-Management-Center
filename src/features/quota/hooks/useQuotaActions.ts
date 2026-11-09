@@ -14,7 +14,13 @@ import {
 import type { AuthFileItem } from '@/types';
 import { getStatusFromError } from '@/utils/quota';
 import { quotaFetchQueueFor } from '../fetchQueue';
-import { buildResetConfirmation, resetFailedNotice, resetSuccessNotice } from '../resetCopy';
+import {
+  buildResetConfirmation,
+  isResetOutcomeUnknown,
+  resetFailedNotice,
+  resetFailedNoticeDuration,
+  resetSuccessNotice,
+} from '../resetCopy';
 import { getQuotaMap, getQuotaSetter, type QuotaAdapter, type QuotaCardState } from '../providers';
 
 const getQuotaState = (adapter: QuotaAdapter, name: string): QuotaCardState | undefined =>
@@ -101,9 +107,15 @@ export function useQuotaActions(disableControls: boolean) {
             });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : t('common.unknown_error');
-            commitIfQuotaCacheCurrent(cacheGeneration, () => {
-              showNotification(resetFailedNotice(adapter, file, message, t), 'error');
-            });
+            const notify = () =>
+              showNotification(
+                resetFailedNotice(adapter, file, message, t),
+                'error',
+                resetFailedNoticeDuration(err)
+              );
+            if (!commitIfQuotaCacheCurrent(cacheGeneration, notify) && isResetOutcomeUnknown(err)) {
+              notify();
+            }
           } finally {
             setResettingQuotaName((current) => (current === file.name ? null : current));
           }

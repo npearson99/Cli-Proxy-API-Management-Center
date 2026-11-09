@@ -32,6 +32,21 @@ export function pendingSupplements(
   });
 }
 
+/**
+ * Whether `name` still wants its supplement. Asked again when the paced queue lets the
+ * request go, since a card can wait seconds there: a live fetch that started meanwhile
+ * reads the same data itself, and sending the supplement anyway would be a second
+ * upstream request for that seat.
+ */
+export const stillNeedsSupplement = (
+  current: Record<string, QuotaCardState>,
+  name: string,
+  adapter: QuotaAdapter
+): boolean => {
+  const state = current[name];
+  return state !== undefined && Boolean(adapter.needsSupplement?.(state));
+};
+
 /** `current` with the supplement merged into `name`, or null when it no longer applies. */
 export function mergeSupplement(
   current: Record<string, QuotaCardState>,
@@ -39,7 +54,7 @@ export function mergeSupplement(
   patch: Partial<QuotaCardState>,
   adapter: QuotaAdapter
 ): Record<string, QuotaCardState> | null {
+  if (!stillNeedsSupplement(current, name, adapter)) return null;
   const state = current[name];
-  if (!state || !adapter.needsSupplement?.(state)) return null;
   return { ...current, [name]: { ...state, ...patch, status: state.status } };
 }

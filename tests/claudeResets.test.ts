@@ -1,11 +1,26 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { TFunction } from 'i18next';
-import { CLAUDE_CONFIG, claimClaudeReset } from '@/features/quota/providers/claude/data';
+import {
+  CLAUDE_CONFIG,
+  CLAUDE_RESET_RETRY_WINDOW_MS,
+  claimClaudeReset,
+  resetClaudeClaimMemory,
+  type ClaudeResetChoice,
+} from '@/features/quota/providers/claude/data';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '@/features/quota/providers';
 import { seedDerivedQuota } from '@/features/quota/derivedSeed';
 import type { QuotaFileEntry } from '@/features/quota/logic';
-import { buildResetConfirmation, resetSuccessNotice } from '@/features/quota/resetCopy';
-import { mergeSupplement, pendingSupplements } from '@/features/quota/supplement';
+import {
+  buildResetConfirmation,
+  isResetOutcomeUnknown,
+  resetFailedNoticeDuration,
+  resetSuccessNotice,
+} from '@/features/quota/resetCopy';
+import {
+  mergeSupplement,
+  pendingSupplements,
+  stillNeedsSupplement,
+} from '@/features/quota/supplement';
 import { apiCallApi, type ApiCallRequest, type ApiCallResult } from '@/services/api';
 import type { AuthFileItem, ClaudeQuotaState, ClaudeResetInfo } from '@/types';
 import {
@@ -16,6 +31,7 @@ import {
   claudeResetKind,
   claudeResetReason,
   claudeResetReasonKey,
+  newClaudeResetRequestId,
   parseClaudeResetGrant,
   parseClaudeResetInfo,
   pickClaudeResetGrant,
@@ -28,6 +44,7 @@ const t = ((key: string, params?: Record<string, unknown>) =>
 const originalRequest = apiCallApi.request;
 afterEach(() => {
   apiCallApi.request = originalRequest;
+  resetClaudeClaimMemory();
 });
 
 const result = (statusCode: number, body: unknown = null): ApiCallResult => ({
@@ -157,6 +174,16 @@ describe('why a grant cannot be used', () => {
     return claudeResetReason(parsed.grants[0], parsed);
   };
 
+  test('paused and spent come before any reason Anthropic gives', () => {
+    expect(reasonFor({ paused: true })).toBe('paused');
+    expect(reasonFor({ resets_left: 0 })).toBe('none_left');
+    const parsed = info();
+    expect(claudeResetReasonKey(parsed.grants[0], 'paused')).toBe('claude_quota.reset_paused');
+    expect(claudeResetReasonKey(parsed.grants[0], 'none_left')).toBe(
+      'claude_quota.reset_none_left'
+    );
+  });
+
   test("Anthropic's own reason comes first", () => {
     expect(reasonFor({}, { cooldown_until: '2026-11-09T20:00:00Z' })).toBe('blocked_seven_day');
   });
@@ -172,6 +199,10 @@ describe('why a grant cannot be used', () => {
       'blocked_opus'
     );
     expect(reasonFor({ unavailable_reason: null, blocking: ['mystery'] })).toBe('blocked_other');
+    // An unknown window listed first must not hide a named one, as Claude Code drops it.
+    expect(reasonFor({ unavailable_reason: null, blocking: ['mystery', 'five_hour'] })).toBe(
+      'blocked_five_hour'
+    );
     expect(reasonFor({ unavailable_reason: null, blocking: ['seven_day_overage_included'] })).toBe(
       'blocked_other'
     );
@@ -295,6 +326,7 @@ describe('claiming a reset', () => {
     grants: [fableGrant({ usable_now: true, unavailable_reason: null, blocking: [] })],
   });
   const claimUrl = `https://api.anthropic.com/api/organizations/${ORG}/reset_rate_limits`;
+  const choice: ClaudeResetChoice = { grantId: 'launch-2610-fable', atLimit: false };
 
   test('re-reads the grant, finds the organization, and posts the claim', async () => {
     route((payload) => {
@@ -304,7 +336,7 @@ describe('claiming a reset', () => {
         return result(200, { result: 'reset', cleared: ['seven_day'], resets_left: 0 });
       throw new Error(`unexpected url ${payload.url}`);
     });
-    const claimed = await claimClaudeReset(file, t, 'launch-2610-fable');
+    const claimed = await claimClaudeReset(file, t, choice);
     expect(claimed).toEqual({ cleared: ['seven_day'], resetsLeft: 0 });
     const post = calls.find((call) => call.method === 'POST')!;
     const body = JSON.parse(post.data ?? '{}');
@@ -319,9 +351,7 @@ describe('claiming a reset', () => {
       if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, statusBody());
       throw new Error(`unexpected url ${payload.url}`);
     });
-    const error = (await claimClaudeReset(file, t, 'launch-2610-fable').catch(
-      (err) => err
-    )) as Error;
+    const error = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
     expect(error.message).toContain('claude_quota.reset_not_claimed');
     expect(error.message).toContain('reset_reason_nothing_to_give_back');
     expect(calls.some((call) => call.method === 'POST')).toBe(false);
@@ -339,9 +369,7 @@ describe('claiming a reset', () => {
         );
       throw new Error(`unexpected url ${payload.url}`);
     });
-    const error = (await claimClaudeReset(file, t, 'launch-2610-fable').catch(
-      (err) => err
-    )) as Error;
+    const error = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
     expect(error.message).toContain('claude_quota.reset_not_claimed');
     expect(error.message).toContain('reset_reason_nothing_to_give_back');
     expect(calls.some((call) => call.method === 'POST')).toBe(false);
@@ -367,6 +395,9 @@ describe('claiming a reset', () => {
     });
     const error = (await claimClaudeReset(file, t).catch((err) => err)) as Error;
     expect(error.message).toContain('claude_quota.reset_outcome_unknown');
+    // Its notice is the only record of the request id: it stays until dismissed.
+    expect(isResetOutcomeUnknown(error)).toBe(true);
+    expect(resetFailedNoticeDuration(error)).toBe(0);
     const requestId = JSON.parse(calls.find((call) => call.method === 'POST')!.data!).request_id;
     expect(error.message).toContain(requestId);
     expect(error.message).toContain(
@@ -393,6 +424,169 @@ describe('claiming a reset', () => {
     const error = (await claimClaudeReset(file, t).catch((err) => err)) as Error;
     expect(error.message).toContain('claude_quota.reset_not_claimed');
     expect(error.message).toContain('not_limited: under limit');
+    expect(isResetOutcomeUnknown(error)).toBe(false);
+    expect(resetFailedNoticeDuration(error)).toBeUndefined();
+  });
+
+  const atLimitBody = statusBody({
+    at_limit: true,
+    exhausted: ['seven_day'],
+    grants: [fableGrant({ usable_now: true, unavailable_reason: null, blocking: [] })],
+  });
+  const posts = () => calls.filter((call) => call.method === 'POST');
+  const postedRequestIds = () => posts().map((call) => JSON.parse(call.data ?? '{}').request_id);
+
+  test('a second claim on the same seat while one is in flight sends nothing', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    route(async (payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      await held;
+      return result(200, { result: 'reset', cleared: ['seven_day'], resets_left: 0 });
+    });
+    const first = claimClaudeReset(file, t, choice);
+    const second = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
+    expect(second.message).toContain('claude_quota.reset_in_progress');
+    release();
+    await first;
+    expect(posts()).toHaveLength(1);
+    // Once the first settles, the seat can be claimed again.
+    await claimClaudeReset(file, t, choice);
+    expect(posts()).toHaveLength(2);
+  });
+
+  test('using the reset again after an open outcome retries the same request id', async () => {
+    let answer: ApiCallResult = result(502, { error: 'upstream' });
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      return answer;
+    });
+    await claimClaudeReset(file, t, choice).catch(() => undefined);
+    await claimClaudeReset(file, t, choice).catch(() => undefined);
+    answer = result(200, { result: 'reset', cleared: ['seven_day'], resets_left: 0 });
+    await claimClaudeReset(file, t, choice);
+    const ids = postedRequestIds();
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(1);
+    // Settled by `reset`: the next claim is a new request.
+    await claimClaudeReset(file, t, choice);
+    expect(new Set(postedRequestIds()).size).toBe(2);
+  });
+
+  test('an open outcome is never later reported as nothing having been used', async () => {
+    let status = usableBody;
+    let answer: ApiCallResult = result(200, { result: 'unavailable' });
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, status);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      return answer;
+    });
+    const open = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
+    expect(open.message).toContain('claude_quota.reset_outcome_unknown');
+    const requestId = postedRequestIds()[0];
+
+    // The first request landed after all: the grant reads spent before any POST.
+    status = statusBody({ grants: [fableGrant({ resets_left: 0, usable_now: false })] });
+    const spent = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
+    expect(spent.message).toContain('claude_quota.reset_retry_unsettled');
+    expect(spent.message).toContain(requestId);
+    expect(spent.message).not.toContain('reset_not_claimed');
+    expect(isResetOutcomeUnknown(spent)).toBe(true);
+    expect(posts()).toHaveLength(1);
+
+    // A retry Anthropic answers with a not-spent result still names the earlier request.
+    status = usableBody;
+    answer = result(200, { result: 'cooldown' });
+    const cooled = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
+    expect(cooled.message).toContain('claude_quota.reset_retry_unsettled');
+    expect(postedRequestIds()).toEqual([requestId, requestId]);
+  });
+
+  test('an open outcome older than the retry window is not retried', async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      route((payload) => {
+        if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+        if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+        return result(502, { error: 'upstream' });
+      });
+      await claimClaudeReset(file, t, choice).catch(() => undefined);
+      now += CLAUDE_RESET_RETRY_WINDOW_MS;
+      await claimClaudeReset(file, t, choice).catch(() => undefined);
+      expect(new Set(postedRequestIds()).size).toBe(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test('spends nothing when the seat has left the limit the dialog was shown at', async () => {
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+      throw new Error(`unexpected url ${payload.url}`);
+    });
+    const error = (await claimClaudeReset(file, t, { ...choice, atLimit: true }).catch(
+      (err) => err
+    )) as Error;
+    expect(error.message).toContain('claude_quota.reset_not_claimed');
+    expect(error.message).toContain('reset_limit_cleared');
+    expect(posts()).toHaveLength(0);
+  });
+
+  test('a seat still at its limit is claimed as the dialog said', async () => {
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, atLimitBody);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      return result(200, { result: 'reset', cleared: ['seven_day'], resets_left: 0 });
+    });
+    await claimClaudeReset(file, t, { ...choice, atLimit: true });
+    expect(posts()).toHaveLength(1);
+  });
+
+  test('the retry command quotes a file name the shell would split', async () => {
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      return result(502, { error: 'upstream' });
+    });
+    const odd = { name: "claude seat's.json", auth_index: 'idx-2' } as unknown as AuthFileItem;
+    const error = (await claimClaudeReset(odd, t, choice).catch((err) => err)) as Error;
+    const params = JSON.parse(error.message.slice(error.message.indexOf('{')));
+    expect(params.command).toStartWith(`cpa-route claude reset 'claude seat'\\''s.json' --grant `);
+  });
+
+  test('a spent reset whose read-back fails lands as a card error, not a failed claim', async () => {
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL) return result(200, usableBody);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(200, { organization: { uuid: ORG } });
+      if (payload.url === claimUrl)
+        return result(200, { result: 'reset', cleared: ['seven_day'], resets_left: 0 });
+      return result(500, { error: 'usage down' });
+    });
+    const data = await CLAUDE_CONFIG.resetQuota!(file, t, choice);
+    expect(data.claimed).toEqual({ cleared: ['seven_day'], resetsLeft: 0 });
+    const state = CLAUDE_CONFIG.buildSuccessState(data);
+    expect(state.status).toBe('error');
+    expect(state.error).toContain('claude_quota.reset_readback_failed');
+    expect(CLAUDE_CONFIG.canResetQuota?.(state)).toBe(false);
+  });
+});
+
+describe('a claim request id', () => {
+  test('is a v4 UUID even where crypto.randomUUID is missing (plain HTTP)', () => {
+    const cryptoApi = globalThis.crypto as { randomUUID?: unknown };
+    const original = cryptoApi.randomUUID;
+    Object.defineProperty(cryptoApi, 'randomUUID', { value: undefined, configurable: true });
+    try {
+      const id = newClaudeResetRequestId();
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(newClaudeResetRequestId()).not.toBe(id);
+    } finally {
+      Object.defineProperty(cryptoApi, 'randomUUID', { value: original, configurable: true });
+    }
   });
 });
 
@@ -466,7 +660,7 @@ describe('the words around a reset', () => {
       resets: info({ grants: [fableGrant({ usable_now: true, unavailable_reason: null })] }),
     } as QuotaCardState;
     const confirmation = buildResetConfirmation(QUOTA_ADAPTERS.claude, file, quota, t)!;
-    expect(confirmation.option).toBe('launch-2610-fable');
+    expect(confirmation.option).toEqual({ grantId: 'launch-2610-fable', atLimit: false });
     expect(confirmation.message).toContain('claude_quota.reset_confirm_message_fable');
     expect(confirmation.message).toContain('"share":"12%"');
     expect(confirmation.message).toContain('"left":1');
@@ -554,6 +748,14 @@ describe('the supplement for cards painted from the listing', () => {
     );
     expect((merged?.['a.json'] as ClaudeQuotaState).resets?.grants).toHaveLength(1);
     expect(merged?.['a.json'].status).toBe('success');
+  });
+
+  test('is not sent once a live fetch has started while it waited in the queue', () => {
+    expect(stillNeedsSupplement({ 'a.json': seeded(1) }, 'a.json', adapter)).toBe(true);
+    expect(stillNeedsSupplement({ 'a.json': { status: 'loading' } }, 'a.json', adapter)).toBe(
+      false
+    );
+    expect(stillNeedsSupplement({}, 'a.json', adapter)).toBe(false);
   });
 
   test('drops the answer once a live fetch has started or landed', () => {

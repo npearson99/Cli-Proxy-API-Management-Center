@@ -21,6 +21,7 @@ import {
   CLAUDE_REQUEST_HEADERS,
   CLAUDE_RESET_HEADERS,
   CLAUDE_RESET_PROGRAM,
+  CLAUDE_RESET_RETRY_SETTLED,
   CLAUDE_RESET_STATUS_URL,
   claudeGrantGivesNothingBack,
   claudeResetClaimUrl,
@@ -32,9 +33,11 @@ import {
   getStatusFromError,
   isClaudeOrganizationUuid,
   isUsableClaudeGrant,
+  newClaudeResetRequestId,
   parseClaudeResetInfo,
   parseIsoToMs,
   pickClaudeResetGrant,
+  shellWord,
   CLAUDE_FABLE_WINDOW_ID,
   CLAUDE_FABLE_WINDOW_LABEL_KEY,
   CLAUDE_USAGE_WINDOW_KEYS,
@@ -49,6 +52,7 @@ import {
   isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
+import { resetOutcomeUnknownError } from '../../resetCopy';
 import type { QuotaProviderData, QuotaResetDescription } from '../types';
 import { buildClaudeQuotaFromSignals } from './signals';
 
@@ -59,6 +63,8 @@ export type ClaudeQuotaData = {
   resets?: ClaudeResetInfo;
   /** Set by a reset that spent a grant: what it refilled, for the notice. */
   claimed?: { cleared: string[]; resetsLeft: number | null };
+  /** Set when a reset was spent but reading the seat back failed; the card shows it. */
+  readbackError?: string;
 };
 
 const findFableUsageLimit = (payload: ClaudeUsagePayload) => {
@@ -303,7 +309,8 @@ export const describeClaudeResetReason = (
   t: TFunction
 ): string => t(claudeResetReasonKey(grant, claudeResetReason(grant, info)));
 
-const describeShare = (info: ClaudeResetInfo, t: TFunction): string =>
+/** What a Fable reset would give back now, in percent of the weekly limit. */
+export const describeClaudeFableShare = (info: ClaudeResetInfo, t: TFunction): string =>
   info.fableWeeklySharePercent === null
     ? t('claude_quota.reset_share_unknown')
     : `${Math.round(info.fableWeeklySharePercent)}%`;
@@ -319,7 +326,7 @@ const describeClaudeReset = (
   file: AuthFileItem,
   quota: ClaudeQuotaState,
   t: TFunction
-): QuotaResetDescription | null => {
+): QuotaResetDescription<ClaudeResetChoice> | null => {
   const info = quota.resets;
   const grant = pickClaudeResetGrant(info);
   if (!info || !grant) return null;
@@ -330,7 +337,7 @@ const describeClaudeReset = (
     label: grant.label || grant.id,
     left: grant.resetsLeft,
     deadline: formatDeadline(grant),
-    share: describeShare(info, t),
+    share: describeClaudeFableShare(info, t),
     clears: describeClears(grant),
   };
   const message = [
@@ -354,48 +361,117 @@ const describeClaudeReset = (
     );
   }
   return {
-    option: grant.id,
+    option: { grantId: grant.id, atLimit: info.atLimit },
     title: t('claude_quota.reset_confirm_title', { kind }),
     message: message.join(' '),
     confirmText: t('claude_quota.reset_confirm_button', { kind }),
   };
 };
 
+/** What a confirmation named, and the premise it was shown on. */
+export interface ClaudeResetChoice {
+  grantId: string;
+  /**
+   * The card read the seat at a limit the reset program counts, so the dialog did
+   * not warn that a reset now refills windows that still have room.
+   */
+  atLimit: boolean;
+}
+
+/**
+ * Claude Code retries an unsettled claim on the same grant with the same request id
+ * for ten minutes. The id is Anthropic's idempotency key, so using the reset again
+ * after an unknown outcome retries the first request instead of risking a second one.
+ */
+export const CLAUDE_RESET_RETRY_WINDOW_MS = 10 * 60 * 1000;
+
+interface UnsettledClaim {
+  grantId: string;
+  requestId: string;
+  /** When the request was first sent; a retry keeps it, as Claude Code does. */
+  atMs: number;
+}
+
+// Both keyed by credential, module-scoped so the quota page and the auth-file cards
+// share them: one claim in flight per seat, and one unsettled request id per seat.
+const claimsInFlight = new Set<string>();
+const unsettledClaims = new Map<string, UnsettledClaim>();
+
+/** Tests only: forget every claim in flight and every unsettled request id. */
+export const resetClaudeClaimMemory = (): void => {
+  claimsInFlight.clear();
+  unsettledClaims.clear();
+};
+
 const notClaimed = (t: TFunction, message: string) =>
   new Error(t('claude_quota.reset_not_claimed', { message }));
+
+type ClaimResult = { cleared: string[]; resetsLeft: number | null };
 
 /**
  * Spends one banked reset: the grant the confirmation named, re-read fresh first.
  *
  * Everything before the POST provably spends nothing and says so. The POST itself is
  * idempotent on its request id, so an answer that leaves the outcome open names the
- * id and the `cpa-route` command that retries it without risking a second reset.
+ * id and the `cpa-route` command that retries it, and the next claim of that grant on
+ * this seat within CLAUDE_RESET_RETRY_WINDOW_MS sends the same id. While one is open,
+ * no answer short of `reset` is reported as nothing having been used.
  */
 export const claimClaudeReset = async (
   file: AuthFileItem,
   t: TFunction,
-  grantId?: string
-): Promise<{ cleared: string[]; resetsLeft: number | null }> => {
+  choice?: ClaudeResetChoice
+): Promise<ClaimResult> => {
   const authIndex = resolveAuthIndex(file, t);
+  // A second claim racing the first would carry a fresh request id: two resets.
+  if (claimsInFlight.has(authIndex)) throw new Error(t('claude_quota.reset_in_progress'));
+  claimsInFlight.add(authIndex);
+  try {
+    return await claimOnce(file, authIndex, t, choice);
+  } finally {
+    claimsInFlight.delete(authIndex);
+  }
+};
+
+const claimOnce = async (
+  file: AuthFileItem,
+  authIndex: string,
+  t: TFunction,
+  choice: ClaudeResetChoice | undefined
+): Promise<ClaimResult> => {
+  const recorded = unsettledClaims.get(authIndex);
+  if (recorded && Date.now() - recorded.atMs >= CLAUDE_RESET_RETRY_WINDOW_MS) {
+    unsettledClaims.delete(authIndex);
+  }
+  const open = unsettledClaims.get(authIndex);
+  let retry = open && (!choice || open.grantId === choice.grantId) ? open : undefined;
+  // While an earlier request may have landed, "nothing was used" would be a guess.
+  const refuse = (message: string) =>
+    retry
+      ? resetOutcomeUnknownError(
+          t('claude_quota.reset_retry_unsettled', { message, requestId: retry.requestId })
+        )
+      : notClaimed(t, message);
+
   const info = await fetchClaudeResets(authIndex, t);
-  if (info.error) throw notClaimed(t, info.error);
+  if (info.error) throw refuse(info.error);
   if (!info.eligible) {
-    throw notClaimed(
-      t,
-      t('claude_quota.resets_ineligible', { reason: info.ineligibleReason ?? '-' })
-    );
+    throw refuse(t('claude_quota.resets_ineligible', { reason: info.ineligibleReason ?? '-' }));
   }
-  const grant = grantId
-    ? info.grants.find((candidate) => candidate.id === grantId)
+  const grant = choice
+    ? info.grants.find((candidate) => candidate.id === choice.grantId)
     : pickClaudeResetGrant(info);
-  if (!grant) throw notClaimed(t, t('claude_quota.reset_grant_gone'));
-  if (!isUsableClaudeGrant(grant)) {
-    throw notClaimed(t, describeClaudeResetReason(grant, info, t));
-  }
+  if (!grant) throw refuse(t('claude_quota.reset_grant_gone'));
+  if (retry && retry.grantId !== grant.id) retry = undefined;
+  if (!isUsableClaudeGrant(grant)) throw refuse(describeClaudeResetReason(grant, info, t));
   // Fable may have spent nothing since the dialog opened: re-checked on the fresh read.
   if (claudeGrantGivesNothingBack(grant, info)) {
-    throw notClaimed(t, t('claude_quota.reset_reason_nothing_to_give_back'));
+    throw refuse(t('claude_quota.reset_reason_nothing_to_give_back'));
   }
+  // The dialog warns about headroom only when the card read none, and the card can be
+  // hours old. A seat that has left its limit since was never warned about, and
+  // `cpa-route claude reset` refuses it without --force: so does this.
+  if (choice?.atLimit && !info.atLimit) throw refuse(t('claude_quota.reset_limit_cleared'));
 
   const profile = await apiCallApi
     .request({
@@ -411,18 +487,21 @@ export const claimClaudeReset = async (
       : undefined;
   // Spliced into the claim URL's path, so only a well-formed UUID goes through.
   if (!isClaudeOrganizationUuid(organizationUuid)) {
-    throw notClaimed(t, t('claude_quota.reset_no_organization'));
+    throw refuse(t('claude_quota.reset_no_organization'));
   }
 
-  const requestId = crypto.randomUUID();
-  const unknown = (detail: string) =>
-    new Error(
+  const requestId = retry?.requestId ?? newClaudeResetRequestId();
+  const firstSentAtMs = retry?.atMs ?? Date.now();
+  const unknown = (detail: string) => {
+    unsettledClaims.set(authIndex, { grantId: grant.id, requestId, atMs: firstSentAtMs });
+    return resetOutcomeUnknownError(
       t('claude_quota.reset_outcome_unknown', {
         detail,
         requestId,
-        command: `cpa-route claude reset ${file.name} --grant ${grant.id} --request-id ${requestId}`,
+        command: `cpa-route claude reset ${shellWord(file.name)} --grant ${grant.id} --request-id ${requestId}`,
       })
     );
+  };
   let result;
   try {
     result = await apiCallApi.request({
@@ -441,29 +520,47 @@ export const claimClaudeReset = async (
     // The management API refusing the call (a 4xx) answers before anything is sent;
     // anything else may have reached Anthropic.
     const status = getStatusFromError(err);
-    if (status !== undefined && status >= 400 && status < 500) throw notClaimed(t, message);
+    if (status !== undefined && status >= 400 && status < 500) throw refuse(message);
     throw unknown(message);
   }
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw unknown(getApiCallErrorMessage(result));
   }
   const claim = classifyClaudeResetClaim(result.body ?? result.bodyText);
-  if (claim.outcome === 'reset') return { cleared: claim.cleared, resetsLeft: claim.resetsLeft };
+  if (claim.outcome === 'reset') {
+    unsettledClaims.delete(authIndex);
+    return { cleared: claim.cleared, resetsLeft: claim.resetsLeft };
+  }
   const detail = [claim.result || '-', claim.reason].filter(Boolean).join(': ');
-  if (claim.outcome === 'not_spent') throw notClaimed(t, detail);
-  throw unknown(detail);
+  if (claim.outcome === 'unknown') throw unknown(detail);
+  // A retry answered `already_used` or `not_limited` most likely means the first
+  // attempt landed; whichever it was, the earlier request stays the one to check.
+  if (retry && CLAUDE_RESET_RETRY_SETTLED.has(claim.result)) unsettledClaims.delete(authIndex);
+  throw refuse(detail);
 };
 
 const resetClaudeQuota = async (
   file: AuthFileItem,
   t: TFunction,
-  option?: string
+  choice?: ClaudeResetChoice
 ): Promise<ClaudeQuotaData> => {
-  const claimed = await claimClaudeReset(file, t, option);
+  const claimed = await claimClaudeReset(file, t, choice);
   // Read back live: the canonical usage GET is also what makes the proxy reconcile
   // the seat's routing, so the refilled window serves without a manual reset-quota.
-  const data = await fetchClaudeQuota(file, t);
-  return { ...data, claimed };
+  try {
+    const data = await fetchClaudeQuota(file, t);
+    return { ...data, claimed };
+  } catch (err: unknown) {
+    // The reset was spent. A throw here would report the claim as failed and leave the
+    // card offering the grant again, so the read-back failure becomes the card's own
+    // error instead: no reset is offered on it until a refresh reads the seat.
+    const message = err instanceof Error ? err.message : t('common.unknown_error');
+    return {
+      windows: [],
+      claimed,
+      readbackError: t('claude_quota.reset_readback_failed', { message }),
+    };
+  }
 };
 
 const describeClaudeResetSuccess = (
@@ -479,7 +576,11 @@ const describeClaudeResetSuccess = (
       })
     : t('claude_quota.reset_success', { name: file.name });
 
-export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData> = {
+export const CLAUDE_CONFIG: QuotaProviderData<
+  ClaudeQuotaState,
+  ClaudeQuotaData,
+  ClaudeResetChoice
+> = {
   type: 'claude',
   i18nPrefix: 'claude_quota',
   filterFn: (file) => isClaudeFile(file) && !isDisabledAuthFile(file),
@@ -507,13 +608,16 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
   storeSelector: (state) => state.claudeQuota,
   storeSetter: 'setClaudeQuota',
   buildLoadingState: () => ({ status: 'loading', windows: [] }),
-  buildSuccessState: (data) => ({
-    status: 'success',
-    windows: data.windows,
-    extraUsage: data.extraUsage,
-    planType: data.planType,
-    resets: data.resets,
-  }),
+  buildSuccessState: (data) =>
+    data.readbackError
+      ? { status: 'error', windows: [], error: data.readbackError }
+      : {
+          status: 'success',
+          windows: data.windows,
+          extraUsage: data.extraUsage,
+          planType: data.planType,
+          resets: data.resets,
+        },
   buildErrorState: (message, status) => ({
     status: 'error',
     windows: [],

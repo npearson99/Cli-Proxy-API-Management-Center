@@ -37,7 +37,7 @@ export interface QuotaAdapter {
   filterFn: (file: AuthFileItem) => boolean;
   fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
   deriveQuota?: (file: AuthFileItem, t: TFunction) => QuotaCardState | null;
-  resetQuota?: (file: AuthFileItem, t: TFunction, option?: string) => Promise<unknown>;
+  resetQuota?: (file: AuthFileItem, t: TFunction, option?: unknown) => Promise<unknown>;
   canResetQuota?: (quota: QuotaCardState) => boolean;
   describeReset?: (
     file: AuthFileItem,

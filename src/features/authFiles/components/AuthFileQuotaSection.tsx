@@ -16,8 +16,10 @@ import { quotaFetchQueueFor } from '@/features/quota/fetchQueue';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '@/features/quota/providers';
 import {
   buildResetConfirmation,
+  isResetOutcomeUnknown,
   resetButtonLabel,
   resetFailedNotice,
+  resetFailedNoticeDuration,
   resetSuccessNotice,
 } from '@/features/quota/resetCopy';
 import styles from './AuthFileQuota.module.scss';
@@ -134,9 +136,15 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
           });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : t('common.unknown_error');
-          commitIfQuotaCacheCurrent(cacheGeneration, () => {
-            showNotification(resetFailedNotice(adapter, file, message, t), 'error');
-          });
+          const notify = () =>
+            showNotification(
+              resetFailedNotice(adapter, file, message, t),
+              'error',
+              resetFailedNoticeDuration(err)
+            );
+          if (!commitIfQuotaCacheCurrent(cacheGeneration, notify) && isResetOutcomeUnknown(err)) {
+            notify();
+          }
         } finally {
           setResettingQuota(false);
         }

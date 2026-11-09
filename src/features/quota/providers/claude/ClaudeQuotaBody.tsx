@@ -12,10 +12,11 @@ import {
   formatInstantShort,
   formatRelativeInstant,
   isClaimableClaudeGrant,
+  isUsableClaudeGrant,
   parseIsoToMs,
 } from '@/utils/quota';
 import { resolveTimeZoneLabel } from '@/utils/time/timezone';
-import { describeClaudeResetReason } from './data';
+import { describeClaudeFableShare, describeClaudeResetReason } from './data';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
@@ -72,18 +73,9 @@ function ClaudeResetGrants({
         let status: string;
         if (claimable) {
           status = grant.givesBackWeekly
-            ? t('claude_quota.reset_usable_fable', {
-                share:
-                  resets.fableWeeklySharePercent === null
-                    ? t('claude_quota.reset_share_unknown')
-                    : `${Math.round(resets.fableWeeklySharePercent)}%`,
-              })
+            ? t('claude_quota.reset_usable_fable', { share: describeClaudeFableShare(resets, t) })
             : t('claude_quota.reset_usable');
-        } else if (grant.paused) {
-          status = t('claude_quota.reset_paused');
-        } else if (grant.resetsLeft === 0) {
-          status = t('claude_quota.reset_none_left');
-        } else if (claudeGrantGivesNothingBack(grant, resets)) {
+        } else if (isUsableClaudeGrant(grant) && claudeGrantGivesNothingBack(grant, resets)) {
           // Usable, but a Fable reset at a 0% share returns nothing; not offered.
           status = t('claude_quota.reset_reason_nothing_to_give_back');
         } else {

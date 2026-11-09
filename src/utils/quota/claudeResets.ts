@@ -180,32 +180,35 @@ export function claudeResetKind(grant: ClaudeResetGrant): ClaudeResetKind {
 const refills = (grant: ClaudeResetGrant, window: string): boolean =>
   grant.clears.includes(window) || (window === 'seven_day' && grant.givesBackWeekly);
 
-/** Claude Code's `tr`: why a grant that is not usable now is not. */
+/** The blocking windows Claude Code has words for; the first one listed decides. */
+const BLOCKING_REASONS: Record<string, ClaudeResetReason> = {
+  five_hour: 'blocked_five_hour',
+  seven_day: 'blocked_seven_day',
+  seven_day_opus: 'blocked_opus',
+  seven_day_sonnet: 'blocked_sonnet',
+};
+
+/**
+ * Why a grant that is not usable now is not: paused and spent first, as `cpa-route
+ * claude status` and Claude Code's grant list say them, then Claude Code's `tr`.
+ */
+export type ClaudeResetGrantReason = ClaudeResetReason | 'paused' | 'none_left';
+
+/** Claude Code's `tr`, behind the paused and none-left checks it never reaches. */
 export function claudeResetReason(
   grant: ClaudeResetGrant,
   info: ClaudeResetInfo
-): ClaudeResetReason {
+): ClaudeResetGrantReason {
+  if (grant.paused) return 'paused';
+  if (grant.resetsLeft === 0) return 'none_left';
   if (grant.unavailableReason !== null) return grant.unavailableReason;
   if (info.cooldownUntil !== null) return 'cooldown';
+  // Any other blocking window (overage, Cowork, OAuth apps, one never heard of) counts
+  // only when none of the named ones is listed: Claude Code drops unknown windows at
+  // parse time, so one listed ahead of `five_hour` must not hide it.
   for (const window of grant.blocking) {
-    switch (window) {
-      case 'five_hour':
-        return 'blocked_five_hour';
-      case 'seven_day':
-        return 'blocked_seven_day';
-      case 'seven_day_opus':
-        return 'blocked_opus';
-      case 'seven_day_sonnet':
-        return 'blocked_sonnet';
-      // Windows a reset never waits on.
-      case 'seven_day_overage_included':
-      case 'seven_day_cowork':
-      case 'seven_day_omelette':
-      case 'seven_day_oauth_apps':
-        break;
-      default:
-        return 'blocked_other';
-    }
+    const reason = BLOCKING_REASONS[window];
+    if (reason) return reason;
   }
   if (grant.blocking.length > 0) return 'blocked_other';
   if (info.atLimit && !info.exhausted.some((window) => refills(grant, window))) {
@@ -218,12 +221,36 @@ export function claudeResetReason(
  * The i18n key for a reason's text. A Fable reset blocked by the weekly window is
  * blocked because Fable used nothing this week: there is nothing for it to give back.
  */
-export function claudeResetReasonKey(grant: ClaudeResetGrant, reason: ClaudeResetReason): string {
+export function claudeResetReasonKey(
+  grant: ClaudeResetGrant,
+  reason: ClaudeResetGrantReason
+): string {
+  if (reason === 'paused') return 'claude_quota.reset_paused';
+  if (reason === 'none_left') return 'claude_quota.reset_none_left';
   if (reason === 'blocked_seven_day' && grant.givesBackWeekly) {
     return 'claude_quota.reset_reason_nothing_to_give_back';
   }
   return `claude_quota.reset_reason_${reason}`;
 }
+
+/**
+ * A claim's idempotency key. `crypto.randomUUID` exists only in a secure context, and
+ * the panel is often opened over plain HTTP on another box (http://<host>:8317), where
+ * it is undefined; `getRandomValues` is available everywhere.
+ */
+export function newClaudeResetRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** A word for a POSIX shell: as-is when it is plain, single-quoted otherwise. */
+export const shellWord = (value: string): string =>
+  /^[A-Za-z0-9@%+=:,./_-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 
 export const isUsableClaudeGrant = (grant: ClaudeResetGrant): boolean =>
   grant.usableNow && !grant.paused && grant.resetsLeft > 0;
@@ -266,6 +293,17 @@ const NOT_SPENT = new Set([
   'ineligible',
   'rate_limited',
   'auth_error',
+]);
+
+/**
+ * Not-spent answers that settle a retried request id, as Claude Code reads them on a
+ * retry: the earlier attempt landed (`already_used`, `not_limited`) or never will
+ * (`ineligible`). `cooldown`, `rate_limited` and `auth_error` leave it open.
+ */
+export const CLAUDE_RESET_RETRY_SETTLED: ReadonlySet<string> = new Set([
+  'already_used',
+  'not_limited',
+  'ineligible',
 ]);
 
 export type ClaudeResetClaimOutcome =

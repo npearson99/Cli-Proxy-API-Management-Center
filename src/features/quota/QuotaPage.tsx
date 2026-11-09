@@ -52,10 +52,15 @@ import {
 } from './logic';
 import { seedDerivedQuota } from './derivedSeed';
 import { quotaFetchQueueFor } from './fetchQueue';
-import { mergeSupplement, pendingSupplements, supplementKey } from './supplement';
+import {
+  mergeSupplement,
+  pendingSupplements,
+  stillNeedsSupplement,
+  supplementKey,
+} from './supplement';
 import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
 import { summarizeWeeklyCapacity } from './weeklyCapacity';
-import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
+import { QUOTA_ADAPTERS, getQuotaMap, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useQuotaActions } from './hooks/useQuotaActions';
 import { useQuotaBatchLoader } from './hooks/useQuotaBatchLoader';
@@ -270,8 +275,17 @@ export function QuotaPage() {
       pending.forEach((entry) => {
         requested.keys.add(supplementKey(entry));
         void quotaFetchQueueFor(type)
-          .run(() => supplement(entry.file, t))
+          .run(async () => {
+            // Asked again once the queue releases it: a cleared cache or a live fetch
+            // that started while it waited has made the request moot.
+            if (captureQuotaCacheGeneration() !== generation) return null;
+            if (!stillNeedsSupplement(getQuotaMap(adapter), entry.file.name, adapter)) {
+              return null;
+            }
+            return supplement(entry.file, t);
+          })
           .then((patch) => {
+            if (!patch) return;
             commitIfQuotaCacheCurrent(generation, () => {
               getQuotaSetter(adapter)(
                 (prev) => mergeSupplement(prev, entry.file.name, patch, adapter) ?? prev

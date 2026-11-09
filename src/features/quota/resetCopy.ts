@@ -50,3 +50,21 @@ export const resetFailedNotice = (
   message: string,
   t: TFunction
 ): string => t(`${adapter.i18nPrefix}.reset_failed`, { name: file.name, message });
+
+const OUTCOME_UNKNOWN = Symbol('quotaResetOutcomeUnknown');
+
+/**
+ * A reset that may have spent something without saying so. Its notice is the only
+ * place the request id and the safe retry are written down, so it stays until it is
+ * dismissed and is shown even when the quota cache was cleared while the reset ran.
+ */
+export const resetOutcomeUnknownError = (message: string): Error =>
+  Object.assign(new Error(message), { [OUTCOME_UNKNOWN]: true });
+
+export const isResetOutcomeUnknown = (err: unknown): boolean =>
+  err instanceof Error &&
+  (err as Error & { [OUTCOME_UNKNOWN]?: boolean })[OUTCOME_UNKNOWN] === true;
+
+/** How long a failed reset's notice stays: until dismissed when the outcome is open. */
+export const resetFailedNoticeDuration = (err: unknown): number | undefined =>
+  isResetOutcomeUnknown(err) ? 0 : undefined;
