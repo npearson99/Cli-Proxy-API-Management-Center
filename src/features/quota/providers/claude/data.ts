@@ -14,7 +14,7 @@ import type {
   ClaudeResetInfo,
   ClaudeUsagePayload,
 } from '@/types';
-import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
+import { apiCallApi, getApiCallErrorMessage, type ApiCallResult } from '@/services/api';
 import {
   CLAUDE_PROFILE_URL,
   CLAUDE_USAGE_URL,
@@ -215,13 +215,8 @@ export const fetchClaudeResets = async (
 ): Promise<ClaudeResetInfo> => {
   const invalid = t('claude_quota.resets_invalid_payload');
   try {
-    const result = await apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_RESET_STATUS_URL,
-      header: { ...CLAUDE_RESET_HEADERS },
-    });
-    if (result.statusCode < 200 || result.statusCode >= 300) {
+    const result = await readClaudeResetStatus(authIndex);
+    if (!isOk(result.statusCode)) {
       return { ...parseClaudeResetInfo(null, ''), error: getApiCallErrorMessage(result) };
     }
     return parseClaudeResetInfo(result.body ?? result.bodyText, invalid);
@@ -229,6 +224,46 @@ export const fetchClaudeResets = async (
     const message = err instanceof Error ? err.message : t('common.unknown_error');
     return { ...parseClaudeResetInfo(null, ''), error: message };
   }
+};
+
+const isOk = (statusCode: number): boolean => statusCode >= 200 && statusCode < 300;
+
+/**
+ * The usage payload with the seat's reset status added. It identifies as the Claude
+ * Code CLI, which the reset program requires, and is not the canonical usage URL, so
+ * the proxy does not reconcile the seat's routing on it.
+ */
+const readClaudeResetStatus = (authIndex: string) =>
+  apiCallApi.request({
+    authIndex,
+    method: 'GET',
+    url: CLAUDE_RESET_STATUS_URL,
+    header: { ...CLAUDE_RESET_HEADERS },
+  });
+
+/**
+ * Why a usage read failed, as an error carrying its status.
+ *
+ * A dead OAuth token and a real rate limit are the same answer here: Anthropic
+ * rejects an expired token on the usage endpoint with 429 `rate_limit_error`, word
+ * for word what it sends a client that asked too often. Reading that as a limit sends
+ * you to wait out a window that is not running, when what the seat needs is a new
+ * sign-in.
+ *
+ * Retry-After does not separate them -- a dead seat answered 457s here, inside the
+ * range a genuine limit uses. The profile endpoint does, in one extra request spent
+ * only on the failing card: a dead token 401s there while a rate-limited one still
+ * answers 200.
+ */
+const usageReadFailure = async (
+  result: ApiCallResult,
+  authIndex: string,
+  t: TFunction
+): Promise<Error> => {
+  if (result.statusCode === 429 && (await claudeTokenIsDead(authIndex))) {
+    return createStatusError(t('claude_quota.token_expired'), result.statusCode);
+  }
+  return createStatusError(getApiCallErrorMessage(result), result.statusCode);
 };
 
 const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<ClaudeQuotaData> => {
@@ -250,22 +285,7 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
     header: { ...CLAUDE_REQUEST_HEADERS },
   });
 
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    // A dead OAuth token and a real rate limit are the same answer here: Anthropic
-    // rejects an expired token on the usage endpoint with 429 `rate_limit_error`,
-    // word for word what it sends a client that asked too often. Reading that as a
-    // limit sends you to wait out a window that is not running, when what the seat
-    // needs is a live credential copied from a box that still refreshes it.
-    //
-    // Retry-After does not separate them — a dead seat answered 457s here, inside
-    // the range a genuine limit uses. The profile endpoint does, in one extra
-    // request spent only on the failing card: a dead token 401s there while a
-    // rate-limited one still answers 200.
-    if (result.statusCode === 429 && (await claudeTokenIsDead(authIndex))) {
-      throw createStatusError(t('claude_quota.token_expired'), result.statusCode);
-    }
-    throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
-  }
+  if (!isOk(result.statusCode)) throw await usageReadFailure(result, authIndex, t);
 
   const payload = parseClaudeUsagePayload(result.body ?? result.bodyText);
   if (!payload) {
@@ -275,7 +295,7 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   const windows = buildClaudeQuotaWindows(payload, t);
   const profileResult = await fetchClaudeProfile(authIndex);
   const planType =
-    profileResult && profileResult.statusCode >= 200 && profileResult.statusCode < 300
+    profileResult && isOk(profileResult.statusCode)
       ? resolveClaudePlanType(
           parseClaudeProfilePayload(profileResult.body ?? profileResult.bodyText)
         )
@@ -286,6 +306,29 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   const resets = await fetchClaudeResets(authIndex, t);
 
   return { windows, extraUsage: payload.extra_usage, planType, resets };
+};
+
+/**
+ * A card neither the listing nor a fetch has painted, painted from one read.
+ *
+ * The reset status is the usage payload with the seat's grants added, so the one
+ * request a card spends to list its banked resets brings its windows too, and every
+ * seat's resets show without a click. It leaves out the plan tier (the profile is a
+ * second request) and the proxy's quota reconcile (that runs on the canonical usage
+ * GET); a refresh does both.
+ */
+const primeClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<ClaudeQuotaData> => {
+  const authIndex = resolveAuthIndex(file, t);
+  const result = await readClaudeResetStatus(authIndex);
+  if (!isOk(result.statusCode)) throw await usageReadFailure(result, authIndex, t);
+  const body = result.body ?? result.bodyText;
+  const payload = parseClaudeUsagePayload(body);
+  if (!payload) throw new Error(t('claude_quota.empty_windows'));
+  return {
+    windows: buildClaudeQuotaWindows(payload, t),
+    extraUsage: payload.extra_usage,
+    resets: parseClaudeResetInfo(body, t('claude_quota.resets_invalid_payload')),
+  };
 };
 
 const resolveAuthIndex = (file: AuthFileItem, t: TFunction): string => {
@@ -585,6 +628,7 @@ export const CLAUDE_CONFIG: QuotaProviderData<
   i18nPrefix: 'claude_quota',
   filterFn: (file) => isClaudeFile(file) && !isDisabledAuthFile(file),
   fetchQuota: fetchClaudeQuota,
+  primeQuota: primeClaudeQuota,
   resetQuota: resetClaudeQuota,
   canResetQuota: (quota) => pickClaudeResetGrant(quota.resets) !== null,
   describeReset: describeClaudeReset,

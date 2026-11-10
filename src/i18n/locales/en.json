@@ -453,6 +453,8 @@
     "reset_retry_unsettled": "nothing new was used ({{message}}), but the earlier request {{requestId}} may have spent a reset: check with cpa-route claude status",
     "reset_readback_failed": "A reset was used, but reading the seat back failed ({{message}}). Refresh to see it.",
     "resets_title": "Banked resets · use by ({{timezone}})",
+    "resets_left_label": "Resets left",
+    "resets_left_usable": "{{count}} usable now",
     "resets_failed": "Failed to load banked resets: {{message}}",
     "resets_invalid_payload": "Invalid banked reset response",
     "resets_ineligible": "Not eligible for banked resets ({{reason}})",

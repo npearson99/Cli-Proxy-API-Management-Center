@@ -10,7 +10,8 @@
  *
  * Seeding never overwrites a live answer. It fills a card that has nothing, and
  * it replaces an earlier seed the listing has since improved on; a `loading`,
- * an `error`, or a fetched `success` is left exactly where it is.
+ * an `error`, or a fetched `success` is left exactly where it is. The one error it
+ * replaces is a failed prime's, which nobody asked for.
  *
  * React-free — tests/quotaDerivedSeed.test.ts consumes it directly.
  */
@@ -23,7 +24,7 @@ import type { QuotaAdapter, QuotaCardState } from './providers';
 const isSeeded = (state: QuotaCardState | undefined): boolean => state?.observedAtMs !== undefined;
 
 const supersedes = (next: QuotaCardState, current: QuotaCardState | undefined): boolean => {
-  if (!current || current.status === 'idle') return true;
+  if (!current || current.status === 'idle' || current.primeFailed) return true;
   // A fetched card outranks the listing even when the listing is newer: it carries
   // the plan tier and the extra-usage block that the headers cannot report.
   if (!isSeeded(current)) return false;

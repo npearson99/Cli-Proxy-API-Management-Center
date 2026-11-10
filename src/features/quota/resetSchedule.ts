@@ -2,7 +2,7 @@
  * When each row on a quota card gets its capacity back.
  *
  * A card lists several limits at once — a 5-hour window, a weekly one, a
- * handful of manual reset credits — and the only one that governs what you can
+ * handful of manual reset credits or banked Claude resets — and the only one that governs what you can
  * do next is whichever recovers first. Reading five timestamps to find it is
  * the work this moves off the user.
  *
@@ -53,6 +53,31 @@ export function resetCreditRowId(
 ): string {
   return credit.id || `${credit.expiresAt}-${index}`;
 }
+
+/**
+ * Row identity for a Claude banked-reset grant, shared by `ClaudeQuotaBody`'s key and
+ * highlight for the same reason as `resetCreditRowId`. Prefixed so a grant can never
+ * share an id with a window row on the same card.
+ */
+export const claudeGrantRowId = (grant: { id: string }): string => `grant:${grant.id}`;
+
+interface ClaudeGrantLike {
+  id: string;
+  resetsLeft: number;
+  endsAt: string | null;
+}
+
+/** Claude grants still holding a reset, with the instant each must be used by. */
+const claudeGrantInstants = (quota: unknown): QuotaRowInstant[] =>
+  ((quota as { resets?: { grants?: ClaudeGrantLike[] } }).resets?.grants ?? [])
+    .map((grant): QuotaRowInstant | null => {
+      if (grant.resetsLeft <= 0) return null;
+      const atMs = parseIsoToMs(grant.endsAt);
+      return atMs === null
+        ? null
+        : { rowId: claudeGrantRowId(grant), atMs, kind: 'credit', weekly: false };
+    })
+    .filter((instant): instant is QuotaRowInstant => instant !== null);
 
 /* Structural shapes — the five provider states disagree about where a window
    lives, so each is read on its own terms rather than through a lossy
@@ -116,7 +141,8 @@ export function collectQuotaRowInstants(
 
   if (provider === 'claude' || provider === 'codex') {
     const windows = collectRows((quota as { windows?: WindowLike[] }).windows ?? [], 'window');
-    if (provider !== 'codex') return windows;
+    // A banked reset expires unused like a Codex credit, so it competes the same way.
+    if (provider === 'claude') return [...windows, ...claudeGrantInstants(quota)];
 
     const credits = (
       (quota as { rateLimitResetCredits?: ResetCreditLike[] }).rateLimitResetCredits ?? []

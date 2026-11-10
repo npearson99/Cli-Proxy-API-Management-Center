@@ -59,6 +59,14 @@ export interface QuotaProviderData<TState, TData, TOption = never> {
    * before deciding whether anything is worth fetching live.
    */
   deriveQuota?: (file: AuthFileItem, t: TFunction) => TState | null;
+  /**
+   * One read that paints a card neither the listing nor a fetch has painted, run once
+   * per card per cache generation through the provider's paced queue. For a provider
+   * whose cheapest live read already carries everything a card shows, so painting a
+   * card costs the one request its supplement would have cost anyway. Throws like
+   * `fetchQuota`; the card then shows the error.
+   */
+  primeQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;
   /** `option` is what `describeReset` chose to spend, when the provider has a choice. */
   resetQuota?: (file: AuthFileItem, t: TFunction, option?: TOption) => Promise<TData>;
   canResetQuota?: (quota: TState) => boolean;

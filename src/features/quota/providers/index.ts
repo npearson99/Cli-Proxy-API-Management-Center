@@ -29,6 +29,8 @@ export interface QuotaCardState {
   errorStatus?: number;
   /** Set only on a card built by `deriveQuota`; see ClaudeQuotaState.observedAtMs. */
   observedAtMs?: number;
+  /** Set on an error a prime painted. Nobody asked for that read, so a seed replaces it. */
+  primeFailed?: boolean;
 }
 
 export interface QuotaAdapter {
@@ -37,6 +39,7 @@ export interface QuotaAdapter {
   filterFn: (file: AuthFileItem) => boolean;
   fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
   deriveQuota?: (file: AuthFileItem, t: TFunction) => QuotaCardState | null;
+  primeQuota?: (file: AuthFileItem, t: TFunction) => Promise<unknown>;
   resetQuota?: (file: AuthFileItem, t: TFunction, option?: unknown) => Promise<unknown>;
   canResetQuota?: (quota: QuotaCardState) => boolean;
   describeReset?: (

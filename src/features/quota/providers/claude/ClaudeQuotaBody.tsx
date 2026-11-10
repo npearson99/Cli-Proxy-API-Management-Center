@@ -20,7 +20,7 @@ import { describeClaudeFableShare, describeClaudeResetReason } from './data';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
-import { collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
+import { claudeGrantRowId, collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
 import type { QuotaBodyProps, QuotaClassMap } from '../../types';
 
 // Kinds read lower-case inside a sentence ("Use a weekly reset?"), so a row that
@@ -28,12 +28,25 @@ import type { QuotaBodyProps, QuotaClassMap } from '../../types';
 const capitalize = (text: string, locale?: string) =>
   text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
 
-/** One row per grant: kind and count, use-by date, then usable-now or why not. */
+/** Resets the seat still holds, and how many of those it could spend right now. */
+const countResets = (resets: ClaudeResetInfo) => ({
+  left: resets.grants.reduce((sum, grant) => sum + grant.resetsLeft, 0),
+  usable: resets.grants
+    .filter((grant) => isClaimableClaudeGrant(grant, resets))
+    .reduce((sum, grant) => sum + grant.resetsLeft, 0),
+});
+
+/**
+ * One row per grant: kind and count, use-by date, then usable-now or why not. A grant
+ * in its last hour takes the card's emphasis, as an expiring Codex credit does.
+ */
 function ClaudeResetGrants({
   resets,
+  soonestRowId,
   classes,
 }: {
   resets: ClaudeResetInfo;
+  soonestRowId: string | null;
   classes: QuotaClassMap;
 }) {
   const { t, i18n } = useTranslation();
@@ -62,6 +75,8 @@ function ClaudeResetGrants({
         {t('claude_quota.resets_title', { timezone: resolveTimeZoneLabel() })}
       </div>
       {resets.grants.map((grant) => {
+        const rowId = claudeGrantRowId(grant);
+        const soon = rowId === soonestRowId;
         const endsAtMs = parseIsoToMs(grant.endsAt);
         const deadline = buildResetDisplay(
           endsAtMs === null ? grant.endsAt : formatInstantShort(endsAtMs),
@@ -82,7 +97,15 @@ function ClaudeResetGrants({
           status = describeClaudeResetReason(grant, resets, t);
         }
         return (
-          <div key={grant.id} className={classes.codexResetCreditRow} title={grant.id}>
+          <div
+            key={rowId}
+            className={
+              soon
+                ? `${classes.codexResetCreditRow} ${classes.codexResetCreditRowSoon}`
+                : classes.codexResetCreditRow
+            }
+            title={soon ? `${grant.id}\n${t('quota_management.soonest_row_hint')}` : grant.id}
+          >
             <span className={classes.claudeResetGrantMain}>
               <span className={classes.codexResetCreditLabel}>
                 {capitalize(
@@ -105,7 +128,7 @@ function ClaudeResetGrants({
               </span>
             </span>
             <span className={classes.codexResetCreditTime}>
-              {deadline && <QuotaResetLabel display={deadline} classes={classes} />}
+              {deadline && <QuotaResetLabel display={deadline} classes={classes} soon={soon} />}
             </span>
           </div>
         );
@@ -124,6 +147,11 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
   const windows = quota.windows ?? [];
   const extraUsage = quota.extraUsage ?? null;
   const planType = quota.planType ?? null;
+  const resets = quota.resets;
+  const resetCount =
+    resets && !resets.error && resets.eligible && resets.grants.length > 0
+      ? countResets(resets)
+      : null;
 
   return (
     <>
@@ -150,7 +178,20 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
           </span>
         </div>
       )}
-      {quota.resets && <ClaudeResetGrants resets={quota.resets} classes={classes} />}
+      {resetCount && (
+        <div className={classes.codexPlan}>
+          <span className={classes.codexPlanLabel}>{t('claude_quota.resets_left_label')}</span>
+          <span className={classes.codexPlanValue}>{resetCount.left.toString()}</span>
+          {resetCount.usable > 0 && (
+            <span className={classes.quotaResetRelative}>
+              {t('claude_quota.resets_left_usable', { count: resetCount.usable })}
+            </span>
+          )}
+        </div>
+      )}
+      {resets && (
+        <ClaudeResetGrants resets={resets} soonestRowId={soonestRowId} classes={classes} />
+      )}
       {windows.length === 0 ? (
         <div className={classes.quotaMessage}>{t('claude_quota.empty_windows')}</div>
       ) : (

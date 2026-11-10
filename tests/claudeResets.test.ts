@@ -17,10 +17,21 @@ import {
   resetSuccessNotice,
 } from '@/features/quota/resetCopy';
 import {
+  mergePrime,
   mergeSupplement,
+  pendingPrimes,
   pendingSupplements,
+  primeKey,
+  stillNeedsPrime,
   stillNeedsSupplement,
 } from '@/features/quota/supplement';
+import {
+  claudeGrantRowId,
+  collectQuotaRowInstants,
+  nextRecoveryMs,
+  pickUrgentRowId,
+} from '@/features/quota/resetSchedule';
+import { buildTimelineLane, projectResetCredits } from '@/features/quota/quotaTimelineModel';
 import { apiCallApi, type ApiCallRequest, type ApiCallResult } from '@/services/api';
 import type { AuthFileItem, ClaudeQuotaState, ClaudeResetInfo } from '@/types';
 import {
@@ -773,5 +784,202 @@ describe('the supplement for cards painted from the listing', () => {
     const next = seedDerivedQuota([entry('a.json')], withResets, seedAdapter, t);
     expect(next?.['a.json'].observedAtMs).toBe(2);
     expect((next?.['a.json'] as ClaudeQuotaState).resets?.grants).toHaveLength(1);
+  });
+});
+
+describe('priming a card nothing has painted', () => {
+  const adapter = QUOTA_ADAPTERS.claude;
+  const entry = (name: string, disabled = false): QuotaFileEntry =>
+    ({ file: { name, disabled }, type: 'claude' }) as QuotaFileEntry;
+
+  test('paints windows and banked resets from the one reset-status read', async () => {
+    const urls: string[] = [];
+    apiCallApi.request = (async (payload: ApiCallRequest) => {
+      urls.push(payload.url);
+      return result(
+        200,
+        statusBody(
+          {},
+          {
+            seven_day: { utilization: 40, resets_at: '2026-11-17T13:00:00+00:00' },
+            extra_usage: null,
+          }
+        )
+      );
+    }) as typeof apiCallApi.request;
+    const data = await CLAUDE_CONFIG.primeQuota!(file, t);
+    expect(urls).toEqual([CLAUDE_RESET_STATUS_URL]);
+    expect(data.windows.map((window) => window.id)).toContain('seven-day');
+    expect(data.windows.find((window) => window.id === 'seven-day')?.usedPercent).toBe(40);
+    expect(data.resets?.grants.map((grant) => grant.id)).toEqual(['launch-2610-fable']);
+    expect(data.planType).toBeUndefined();
+    const state = CLAUDE_CONFIG.buildSuccessState(data);
+    expect(state.status).toBe('success');
+    expect(state.observedAtMs).toBeUndefined();
+  });
+
+  test('a 429 on a dead token says so, like a refresh does', async () => {
+    const urls: string[] = [];
+    apiCallApi.request = (async (payload: ApiCallRequest) => {
+      urls.push(payload.url);
+      if (payload.url === CLAUDE_PROFILE_URL) return result(401, { error: 'expired' });
+      return result(429, { error: { type: 'rate_limit_error' } });
+    }) as typeof apiCallApi.request;
+    await expect(CLAUDE_CONFIG.primeQuota!(file, t)).rejects.toThrow('claude_quota.token_expired');
+    expect(urls).toEqual([CLAUDE_RESET_STATUS_URL, CLAUDE_PROFILE_URL]);
+  });
+
+  test('a body with no windows fails rather than painting an empty card', async () => {
+    apiCallApi.request = (async () => result(200, 'not json')) as typeof apiCallApi.request;
+    await expect(CLAUDE_CONFIG.primeQuota!(file, t)).rejects.toThrow();
+  });
+
+  test('is asked once for each card nothing has painted', () => {
+    const current = {
+      'seeded.json': { status: 'success', observedAtMs: 1 } as QuotaCardState,
+      'loading.json': { status: 'loading' } as QuotaCardState,
+      'idle.json': { status: 'idle' } as QuotaCardState,
+      'failed.json': { status: 'error' } as QuotaCardState,
+    };
+    const entries = [
+      entry('seeded.json'),
+      entry('loading.json'),
+      entry('idle.json'),
+      entry('failed.json'),
+      entry('empty.json'),
+      entry('disabled.json', true),
+    ];
+    expect(
+      pendingPrimes(entries, current, adapter, new Set()).map((item) => item.file.name)
+    ).toEqual(['idle.json', 'empty.json']);
+    expect(
+      pendingPrimes(entries, current, adapter, new Set([primeKey(entry('empty.json'))])).map(
+        (item) => item.file.name
+      )
+    ).toEqual(['idle.json']);
+    // A supplement already asked for does not stop a prime, nor the other way round.
+    expect(primeKey(entry('a.json'))).not.toBe('claude:a.json');
+  });
+
+  test('a provider without a prime is never primed', () => {
+    const codex = QUOTA_ADAPTERS.codex;
+    expect(
+      pendingPrimes(
+        [{ file: { name: 'c.json' }, type: 'codex' } as QuotaFileEntry],
+        {},
+        codex,
+        new Set()
+      )
+    ).toEqual([]);
+  });
+
+  test('drops its answer once a seed, a click or a refresh painted the card', () => {
+    const primed = { status: 'success', windows: [] } as QuotaCardState;
+    expect(stillNeedsPrime({}, 'a.json')).toBe(true);
+    expect(mergePrime({}, 'a.json', primed)?.['a.json']).toBe(primed);
+    for (const painted of [
+      { status: 'loading' },
+      { status: 'success', observedAtMs: 1 },
+      { status: 'error' },
+    ] as QuotaCardState[]) {
+      expect(stillNeedsPrime({ 'a.json': painted }, 'a.json')).toBe(false);
+      expect(mergePrime({ 'a.json': painted }, 'a.json', primed)).toBeNull();
+    }
+  });
+
+  test('a seed replaces an error a prime painted, never one a refresh did', () => {
+    const seedAdapter = {
+      ...adapter,
+      deriveQuota: () => ({ status: 'success', observedAtMs: 5 }) as QuotaCardState,
+    };
+    const primeFailed = { status: 'error', error: 'x', primeFailed: true } as QuotaCardState;
+    const refreshFailed = { status: 'error', error: 'x' } as QuotaCardState;
+    expect(
+      seedDerivedQuota([entry('a.json')], { 'a.json': primeFailed }, seedAdapter, t)?.['a.json']
+        .observedAtMs
+    ).toBe(5);
+    expect(
+      seedDerivedQuota([entry('a.json')], { 'a.json': refreshFailed }, seedAdapter, t)
+    ).toBeNull();
+  });
+
+  test('a primed card is never asked for a supplement', () => {
+    const primed = CLAUDE_CONFIG.buildSuccessState({ windows: [], resets: info() });
+    expect(adapter.needsSupplement?.(primed as QuotaCardState)).toBe(false);
+  });
+});
+
+describe('banked resets on the schedule and the timeline', () => {
+  const ENDS = '2027-03-09T07:59:00+00:00';
+  const endsMs = Date.parse(ENDS);
+  const card = (grants: Record<string, unknown>[]): ClaudeQuotaState => ({
+    status: 'success',
+    windows: [],
+    resets: info({ grants }),
+  });
+
+  test('a grant still holding a reset is a use-by instant; a spent one is not', () => {
+    const instants = collectQuotaRowInstants(
+      'claude',
+      card([
+        fableGrant({ ends_at: ENDS }),
+        fableGrant({ id: 'launch-2610-fable-6mo', resets_left: 0 }),
+      ])
+    );
+    expect(instants).toEqual([
+      {
+        rowId: claudeGrantRowId({ id: 'launch-2610-fable' }),
+        atMs: endsMs,
+        kind: 'credit',
+        weekly: false,
+      },
+    ]);
+  });
+
+  test('takes the emphasis only in its last hour, like a Codex credit', () => {
+    const quota = card([fableGrant({ ends_at: ENDS })]);
+    const instants = collectQuotaRowInstants('claude', quota);
+    expect(pickUrgentRowId(instants, endsMs - 2 * 60 * 60 * 1000)).toBeNull();
+    expect(pickUrgentRowId(instants, endsMs - 30 * 60 * 1000)).toBe('grant:launch-2610-fable');
+    expect(nextRecoveryMs('claude', quota, endsMs - 1000)).toBe(endsMs);
+  });
+
+  test('the row id never collides with a window id', () => {
+    expect(claudeGrantRowId({ id: 'seven-day' })).not.toBe('seven-day');
+  });
+
+  test('the timeline marks where each banked reset must be used by', () => {
+    const quota = {
+      ...card([
+        fableGrant({ ends_at: ENDS }),
+        fableGrant({ id: 'launch-2610-fable-6mo', resets_left: 0 }),
+      ]),
+      windows: [
+        {
+          id: 'seven-day',
+          label: '7-day',
+          usedPercent: 40,
+          resetLabel: '',
+          resetAtMs: endsMs - 3 * 24 * 60 * 60 * 1000,
+          periodHours: 168,
+        },
+      ],
+    };
+    const lane = buildTimelineLane({
+      name: 'a.json',
+      displayName: 'a.json',
+      provider: 'claude',
+      quota,
+    });
+    expect(lane.resetCredits).toEqual([
+      {
+        id: 'launch-2610-fable',
+        grantedAtMs: Date.parse('2026-11-09T18:00:00+00:00'),
+        expiresAtMs: endsMs,
+      },
+    ]);
+    const marks = projectResetCredits(lane, endsMs - 7 * 864e5, endsMs + 7 * 864e5, endsMs - 864e5);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].leftPercent).toBe(50);
   });
 });

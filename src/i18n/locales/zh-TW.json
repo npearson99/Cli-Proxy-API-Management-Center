@@ -453,6 +453,8 @@
     "reset_retry_unsettled": "本次未消耗新的重置（{{message}}），但先前的請求 {{requestId}} 可能已消耗一次重置：用 cpa-route claude status 查看",
     "reset_readback_failed": "已使用一次重置，但重新讀取該帳號失敗（{{message}}）。請重新整理查看。",
     "resets_title": "儲備重置 · 截止（{{timezone}}）",
+    "resets_left_label": "剩餘重置",
+    "resets_left_usable": "目前可用 {{count}} 次",
     "resets_failed": "儲備重置載入失敗：{{message}}",
     "resets_invalid_payload": "儲備重置回應無效",
     "resets_ineligible": "不符合儲備重置條件（{{reason}}）",

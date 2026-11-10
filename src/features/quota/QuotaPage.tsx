@@ -5,6 +5,8 @@
  * - 免费优先：卡片先用 auth-files 自带的限流表头填满（零上游请求），
  *   只有用户点击/刷新才真正打上游，且一律经 fetchQueue 限流；
  *   例外是 supplementQuota：表头给不出的数据（Claude 储备重置）每卡一次，同样限流；
+ *   以及 primeQuota：表头里什么都没有的卡（Claude 自代理启动后未服务过的座位），
+ *   每卡一次读取即铺满整卡（窗口 + 储备重置），同样限流；
  * - cacheGeneration 会话隔离 + request-id 去重（见 useQuotaBatchLoader）；
  * - 文件列表变化后按 provider 剪枝额度缓存（已删文件不残留）；
  * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表。
@@ -28,6 +30,7 @@ import {
   useThemeStore,
 } from '@/stores';
 import type { AuthFileItem, ResolvedTheme } from '@/types';
+import { getStatusFromError } from '@/utils/quota';
 import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
@@ -53,8 +56,12 @@ import {
 import { seedDerivedQuota } from './derivedSeed';
 import { quotaFetchQueueFor } from './fetchQueue';
 import {
+  mergePrime,
   mergeSupplement,
+  pendingPrimes,
   pendingSupplements,
+  primeKey,
+  stillNeedsPrime,
   stillNeedsSupplement,
   supplementKey,
 } from './supplement';
@@ -269,6 +276,39 @@ export function QuotaPage() {
     }
     QUOTA_TAB_ORDER.forEach((type) => {
       const adapter = QUOTA_ADAPTERS[type];
+      const prime = adapter.primeQuota;
+      // The store, not this render's snapshot: the seed effect above has already
+      // painted what the listing carries, and those cards need no prime.
+      if (prime) {
+        pendingPrimes(entries, getQuotaMap(adapter), adapter, requested.keys).forEach((entry) => {
+          requested.keys.add(primeKey(entry));
+          void quotaFetchQueueFor(type)
+            .run(async (): Promise<QuotaCardState | null> => {
+              if (captureQuotaCacheGeneration() !== generation) return null;
+              if (!stillNeedsPrime(getQuotaMap(adapter), entry.file.name)) return null;
+              try {
+                return adapter.buildSuccessState(await prime(entry.file, t));
+              } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : t('common.unknown_error');
+                // Nobody asked for this read, so a seed may replace what it failed with.
+                return {
+                  ...adapter.buildErrorState(message, getStatusFromError(err)),
+                  primeFailed: true,
+                };
+              }
+            })
+            .then((primed) => {
+              if (!primed) return;
+              commitIfQuotaCacheCurrent(generation, () => {
+                getQuotaSetter(adapter)(
+                  (prev) => mergePrime(prev, entry.file.name, primed) ?? prev
+                );
+              });
+            })
+            .catch(() => undefined);
+        });
+      }
+
       const supplement = adapter.supplementQuota;
       if (!supplement) return;
       const pending = pendingSupplements(entries, quotaByType[type], adapter, requested.keys);

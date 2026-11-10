@@ -446,6 +446,8 @@
     "reset_retry_unsettled": "ничего нового не израсходовано ({{message}}), но предыдущий запрос {{requestId}} мог израсходовать сброс: проверьте командой cpa-route claude status",
     "reset_readback_failed": "Сброс использован, но повторно прочитать аккаунт не удалось ({{message}}). Обновите карточку.",
     "resets_title": "Накопленные сбросы · срок ({{timezone}})",
+    "resets_left_label": "Осталось сбросов",
+    "resets_left_usable": "доступно сейчас: {{count}}",
     "resets_failed": "Не удалось загрузить накопленные сбросы: {{message}}",
     "resets_invalid_payload": "Некорректный ответ о накопленных сбросах",
     "resets_ineligible": "Накопленные сбросы недоступны ({{reason}})",

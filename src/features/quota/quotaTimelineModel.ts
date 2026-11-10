@@ -34,7 +34,7 @@ export interface TimelineLimit {
   remaining: number;
 }
 
-/** A manual quota-reset credit attached to a Codex credential. */
+/** A manual reset attached to a credential: a Codex credit or a banked Claude grant. */
 export interface TimelineResetCredit {
   id: string;
   grantedAtMs: number | null;
@@ -283,6 +283,37 @@ interface ResetCreditLike {
   expiresAt?: string;
 }
 
+interface ClaudeGrantLike {
+  id: string;
+  resetsLeft: number;
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
+const toTimelineCredit = (
+  id: string,
+  grantedAt: string | null | undefined,
+  expiresAt: string | null | undefined
+): TimelineResetCredit | null => {
+  const expiresAtMs = new Date(expiresAt ?? '').getTime();
+  if (!Number.isFinite(expiresAtMs)) return null;
+  const grantedAtMs = new Date(grantedAt ?? '').getTime();
+  return { id, grantedAtMs: Number.isFinite(grantedAtMs) ? grantedAtMs : null, expiresAtMs };
+};
+
+/** Codex credits still available, and Claude grants still holding a reset. */
+const laneResetCredits = (provider: QuotaProviderType, quota: unknown): TimelineResetCredit[] => {
+  const credits =
+    provider === 'codex'
+      ? ((quota as { rateLimitResetCredits?: ResetCreditLike[] }).rateLimitResetCredits ?? [])
+          .filter((credit) => credit.status === 'available')
+          .map((credit) => toTimelineCredit(credit.id ?? '', credit.grantedAt, credit.expiresAt))
+      : ((quota as { resets?: { grants?: ClaudeGrantLike[] } }).resets?.grants ?? [])
+          .filter((grant) => grant.resetsLeft > 0)
+          .map((grant) => toTimelineCredit(grant.id, grant.startsAt, grant.endsAt));
+  return credits.filter((credit): credit is TimelineResetCredit => credit !== null);
+};
+
 interface KimiRowLike {
   label?: string;
   labelKey?: string;
@@ -375,23 +406,7 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     const chosen = preferredCodexWindow ?? pickLaneWindow(windows, maxPeriodHours);
     if (!chosen) return empty;
 
-    const resetCredits =
-      provider === 'codex'
-        ? ((quota as { rateLimitResetCredits?: ResetCreditLike[] }).rateLimitResetCredits ?? [])
-            .filter((credit) => credit.status === 'available')
-            .map((credit): TimelineResetCredit | null => {
-              const expiresAtMs = new Date(credit.expiresAt ?? '').getTime();
-              if (!Number.isFinite(expiresAtMs)) return null;
-
-              const grantedAtMs = new Date(credit.grantedAt ?? '').getTime();
-              return {
-                id: credit.id ?? '',
-                grantedAtMs: Number.isFinite(grantedAtMs) ? grantedAtMs : null,
-                expiresAtMs,
-              };
-            })
-            .filter((credit): credit is TimelineResetCredit => credit !== null)
-        : [];
+    const resetCredits = laneResetCredits(provider, quota);
 
     return {
       ...empty,
