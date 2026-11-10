@@ -15,7 +15,7 @@ import { CodexQuotaBody } from '@/features/quota/providers/codex/CodexQuotaBody'
 import { ClaudeQuotaBody } from '@/features/quota/providers/claude/ClaudeQuotaBody';
 import { KimiQuotaBody } from '@/features/quota/providers/kimi/KimiQuotaBody';
 import { QUOTA_CLASS_KEYS, bindQuotaClasses } from '@/features/quota/types';
-import { formatInstantShort } from '@/utils/quota';
+import { formatInstantShort, parseClaudeResetInfo } from '@/utils/quota';
 import { DAY_MS, HOUR_MS } from '@/utils/time/durations';
 import type { ClaudeQuotaState, CodexQuotaState, KimiQuotaState } from '@/types';
 
@@ -195,5 +195,69 @@ describe('ClaudeQuotaBody', () => {
     expect(markup).toContain('08-06 04:00');
     expect(markup).toMatch(/2 hours/);
     expect(markup).toMatch(/4 days/);
+  });
+
+  const grant = (overrides: Record<string, unknown> = {}) => ({
+    id: 'weekly-a',
+    resets_left: 1,
+    usable_now: true,
+    paused: false,
+    type: 'weekly',
+    clears: ['seven_day'],
+    ends_at: new Date(now + 30 * DAY_MS).toISOString(),
+    ...overrides,
+  });
+  const withGrants = (
+    grants: Record<string, unknown>[],
+    cedar: Record<string, unknown> = {}
+  ): ClaudeQuotaState => ({
+    status: 'success',
+    windows: [
+      {
+        id: 'seven_day',
+        label: '7-day',
+        usedPercent: 60,
+        resetLabel: '08-06 04:00',
+        resetAtMs: now + 4 * DAY_MS,
+        periodHours: 168,
+      },
+    ],
+    resets: parseClaudeResetInfo({ cedar_ember: { eligible: true, grants, ...cedar } }, 'invalid'),
+  });
+
+  test('counts the resets left and how many of them are usable now', () => {
+    const quota = withGrants([
+      grant({ resets_left: 2 }),
+      grant({ id: 'weekly-b', usable_now: false, unavailable_reason: 'cooldown' }),
+    ]);
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+
+    expect(markup).toContain('Resets left');
+    expect(markup).toContain('<span class="codexPlanValue">3</span>');
+    expect(markup).toContain('2 usable now');
+  });
+
+  test('shows no count for a seat the reset program does not serve', () => {
+    const quota = withGrants([grant()], { eligible: false, ineligible_reason: 'surface' });
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+
+    expect(markup).not.toContain('Resets left');
+  });
+
+  test('a grant in its last hour takes the emphasis, and only then', () => {
+    const later = renderToStaticMarkup(
+      createElement(ClaudeQuotaBody, { quota: withGrants([grant()]), classes })
+    );
+    expect(later).not.toContain('codexResetCreditRowSoon');
+
+    const expiring = withGrants([
+      grant({ ends_at: new Date(now + 30 * 60_000).toISOString() }),
+      grant({ id: 'weekly-b' }),
+    ]);
+    const markup = renderToStaticMarkup(
+      createElement(ClaudeQuotaBody, { quota: expiring, classes })
+    );
+    expect(markup.match(/codexResetCreditRowSoon/g)).toHaveLength(1);
+    expect(markup).toContain('quotaResetRelativeSoon');
   });
 });

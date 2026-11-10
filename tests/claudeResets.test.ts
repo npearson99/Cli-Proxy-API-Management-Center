@@ -17,14 +17,16 @@ import {
   resetSuccessNotice,
 } from '@/features/quota/resetCopy';
 import {
+  freeReadKey,
+  freeReadsAskedIn,
   mergePrime,
   mergeSupplement,
-  pendingPrimes,
-  pendingSupplements,
-  primeKey,
-  stillNeedsPrime,
+  pendingFreeReads,
+  scheduleFreeReads,
   stillNeedsSupplement,
+  type FreeReadContext,
 } from '@/features/quota/supplement';
+import type { FetchQueue } from '@/features/quota/fetchQueue';
 import {
   claudeGrantRowId,
   collectQuotaRowInstants,
@@ -738,15 +740,16 @@ describe('the supplement for cards painted from the listing', () => {
       'b.json': { ...seeded(1), resets: info() } as QuotaCardState,
       'c.json': { status: 'loading' } as QuotaCardState,
     };
-    const pending = pendingSupplements(
+    const pending = pendingFreeReads(
       [entry('a.json'), entry('b.json'), entry('c.json'), entry('d.json')],
       current,
       adapter,
       new Set()
     );
-    expect(pending.map((item) => item.file.name)).toEqual(['a.json']);
+    // d.json, which nothing painted, wants its prime: the same one read.
+    expect(pending.map((item) => item.file.name)).toEqual(['a.json', 'd.json']);
     expect(
-      pendingSupplements([entry('a.json')], current, adapter, new Set(['claude:a.json']))
+      pendingFreeReads([entry('a.json')], current, adapter, new Set(['claude:a.json']))
     ).toEqual([]);
   });
 
@@ -829,20 +832,25 @@ describe('priming a card nothing has painted', () => {
     expect(urls).toEqual([CLAUDE_RESET_STATUS_URL, CLAUDE_PROFILE_URL]);
   });
 
-  test('a body with no windows fails rather than painting an empty card', async () => {
-    apiCallApi.request = (async () => result(200, 'not json')) as typeof apiCallApi.request;
-    await expect(CLAUDE_CONFIG.primeQuota!(file, t)).rejects.toThrow();
+  test('an unreadable body fails rather than painting an empty card', async () => {
+    apiCallApi.request = (async () => ({
+      statusCode: 200,
+      header: {},
+      bodyText: 'not json',
+      body: undefined,
+    })) as typeof apiCallApi.request;
+    await expect(CLAUDE_CONFIG.primeQuota!(file, t)).rejects.toThrow('claude_quota.empty_windows');
   });
 
   test('is asked once for each card nothing has painted', () => {
     const current = {
-      'seeded.json': { status: 'success', observedAtMs: 1 } as QuotaCardState,
+      'fetched.json': { status: 'success', resets: info() } as QuotaCardState,
       'loading.json': { status: 'loading' } as QuotaCardState,
       'idle.json': { status: 'idle' } as QuotaCardState,
       'failed.json': { status: 'error' } as QuotaCardState,
     };
     const entries = [
-      entry('seeded.json'),
+      entry('fetched.json'),
       entry('loading.json'),
       entry('idle.json'),
       entry('failed.json'),
@@ -850,21 +858,19 @@ describe('priming a card nothing has painted', () => {
       entry('disabled.json', true),
     ];
     expect(
-      pendingPrimes(entries, current, adapter, new Set()).map((item) => item.file.name)
+      pendingFreeReads(entries, current, adapter, new Set()).map((item) => item.file.name)
     ).toEqual(['idle.json', 'empty.json']);
     expect(
-      pendingPrimes(entries, current, adapter, new Set([primeKey(entry('empty.json'))])).map(
+      pendingFreeReads(entries, current, adapter, new Set([freeReadKey(entry('empty.json'))])).map(
         (item) => item.file.name
       )
     ).toEqual(['idle.json']);
-    // A supplement already asked for does not stop a prime, nor the other way round.
-    expect(primeKey(entry('a.json'))).not.toBe('claude:a.json');
   });
 
   test('a provider without a prime is never primed', () => {
     const codex = QUOTA_ADAPTERS.codex;
     expect(
-      pendingPrimes(
+      pendingFreeReads(
         [{ file: { name: 'c.json' }, type: 'codex' } as QuotaFileEntry],
         {},
         codex,
@@ -873,18 +879,31 @@ describe('priming a card nothing has painted', () => {
     ).toEqual([]);
   });
 
-  test('drops its answer once a seed, a click or a refresh painted the card', () => {
-    const primed = { status: 'success', windows: [] } as QuotaCardState;
-    expect(stillNeedsPrime({}, 'a.json')).toBe(true);
-    expect(mergePrime({}, 'a.json', primed)?.['a.json']).toBe(primed);
+  test('drops its answer once a click, a refresh or a fetch painted the card', () => {
+    const primed = { status: 'success', windows: [], resets: info() } as QuotaCardState;
+    expect(mergePrime({}, 'a.json', primed, adapter)?.['a.json']).toBe(primed);
+    expect(mergePrime({ 'a.json': { status: 'idle' } }, 'a.json', primed, adapter)).not.toBeNull();
     for (const painted of [
       { status: 'loading' },
-      { status: 'success', observedAtMs: 1 },
+      { status: 'success', resets: info({ grants: [] }) },
       { status: 'error' },
+      { status: 'success', observedAtMs: 1, resets: info({ grants: [] }) },
     ] as QuotaCardState[]) {
-      expect(stillNeedsPrime({ 'a.json': painted }, 'a.json')).toBe(false);
-      expect(mergePrime({ 'a.json': painted }, 'a.json', primed)).toBeNull();
+      expect(mergePrime({ 'a.json': painted }, 'a.json', primed, adapter)).toBeNull();
     }
+  });
+
+  test('on a card a seed painted meanwhile it adds the resets and keeps the windows', () => {
+    const seed = { status: 'success', windows: [], observedAtMs: 7 } as QuotaCardState;
+    const primed = { status: 'success', windows: [], resets: info() } as QuotaCardState;
+    const merged = mergePrime({ 'a.json': seed }, 'a.json', primed, adapter)?.[
+      'a.json'
+    ] as ClaudeQuotaState;
+    expect(merged.observedAtMs).toBe(7);
+    expect(merged.resets?.grants).toHaveLength(1);
+    // A failure never replaces a seed.
+    const failed = { status: 'error', error: 'x', primeFailed: true } as QuotaCardState;
+    expect(mergePrime({ 'a.json': seed }, 'a.json', failed, adapter)).toBeNull();
   });
 
   test('a seed replaces an error a prime painted, never one a refresh did', () => {
@@ -894,10 +913,11 @@ describe('priming a card nothing has painted', () => {
     };
     const primeFailed = { status: 'error', error: 'x', primeFailed: true } as QuotaCardState;
     const refreshFailed = { status: 'error', error: 'x' } as QuotaCardState;
-    expect(
-      seedDerivedQuota([entry('a.json')], { 'a.json': primeFailed }, seedAdapter, t)?.['a.json']
-        .observedAtMs
-    ).toBe(5);
+    const replaced = seedDerivedQuota([entry('a.json')], { 'a.json': primeFailed }, seedAdapter, t)?.[
+      'a.json'
+    ];
+    expect(replaced?.observedAtMs).toBe(5);
+    expect(replaced?.primeFailed).toBeUndefined();
     expect(
       seedDerivedQuota([entry('a.json')], { 'a.json': refreshFailed }, seedAdapter, t)
     ).toBeNull();
@@ -906,6 +926,171 @@ describe('priming a card nothing has painted', () => {
   test('a primed card is never asked for a supplement', () => {
     const primed = CLAUDE_CONFIG.buildSuccessState({ windows: [], resets: info() });
     expect(adapter.needsSupplement?.(primed as QuotaCardState)).toBe(false);
+  });
+});
+
+describe('one free read per card, whatever lands meanwhile', () => {
+  const adapter = QUOTA_ADAPTERS.claude;
+  const entry = (name: string): QuotaFileEntry =>
+    ({ file: { name, auth_index: `idx-${name}` }, type: 'claude' }) as unknown as QuotaFileEntry;
+  const seeded = (observedAtMs: number): QuotaCardState =>
+    ({ status: 'success', windows: [], observedAtMs }) as QuotaCardState;
+
+  /** A queue the test lets go one task at a time, and upstream answers it holds. */
+  const harness = (initial: Record<string, QuotaCardState> = {}) => {
+    const released: (() => void)[] = [];
+    const queue: FetchQueue = {
+      run: <T>(task: () => Promise<T>) =>
+        new Promise<void>((resolve) => released.push(resolve)).then(task),
+    };
+    const answers: { url: string; answer: (value: ApiCallResult) => void }[] = [];
+    apiCallApi.request = ((payload: ApiCallRequest) =>
+      new Promise<ApiCallResult>((resolve) =>
+        answers.push({ url: payload.url, answer: resolve })
+      )) as typeof apiCallApi.request;
+    const state = { store: initial, current: true };
+    const ctx: FreeReadContext = {
+      adapter,
+      t,
+      queue,
+      asked: new Set(),
+      isCurrent: () => state.current,
+      read: () => state.store,
+      write: (update) => {
+        if (state.current) state.store = update(state.store);
+      },
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    return {
+      ctx,
+      state,
+      answers,
+      waiting: () => released.length,
+      release: async () => {
+        released.shift()?.();
+        await settle();
+      },
+      answer: async (value: ApiCallResult) => {
+        answers.shift()?.answer(value);
+        await settle();
+      },
+      settle,
+    };
+  };
+
+  test('re-running on every store change asks each card once', async () => {
+    const h = harness({ 'seeded.json': seeded(1) });
+    const entries = [entry('seeded.json'), entry('blank.json')];
+    scheduleFreeReads(entries, h.ctx);
+    scheduleFreeReads(entries, h.ctx);
+    expect(h.waiting()).toBe(2);
+    await h.release();
+    await h.release();
+    expect(h.answers.map((item) => item.url)).toEqual([
+      CLAUDE_RESET_STATUS_URL,
+      CLAUDE_RESET_STATUS_URL,
+    ]);
+    await h.answer(result(200, statusBody()));
+    await h.answer(result(200, statusBody()));
+    const store = h.state.store as Record<string, ClaudeQuotaState>;
+    expect(store['seeded.json'].observedAtMs).toBe(1);
+    expect(store['seeded.json'].resets?.grants).toHaveLength(1);
+    expect(store['blank.json'].status).toBe('success');
+    expect(store['blank.json'].resets?.grants).toHaveLength(1);
+    scheduleFreeReads(entries, h.ctx);
+    expect(h.waiting()).toBe(0);
+  });
+
+  test('a prime out when a seed paints the card gives the seed its resets, and nothing more is sent', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    await h.release();
+    expect(h.answers).toHaveLength(1);
+    h.state.store = { 'a.json': seeded(9) };
+    // The page re-runs on the seed: the card's read is already out.
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    expect(h.waiting()).toBe(0);
+    await h.answer(result(200, statusBody()));
+    const card = h.state.store['a.json'] as ClaudeQuotaState;
+    expect(card.observedAtMs).toBe(9);
+    expect(card.resets?.grants).toHaveLength(1);
+    expect(h.answers).toHaveLength(0);
+  });
+
+  test('a prime still waiting when a seed paints the card goes as its supplement', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    h.state.store = { 'a.json': seeded(9) };
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    expect(h.waiting()).toBe(1);
+    await h.release();
+    expect(h.answers.map((item) => item.url)).toEqual([CLAUDE_RESET_STATUS_URL]);
+    await h.answer(result(200, statusBody()));
+    const card = h.state.store['a.json'] as ClaudeQuotaState;
+    expect(card.observedAtMs).toBe(9);
+    expect(card.resets?.grants).toHaveLength(1);
+  });
+
+  test('a failed prime paints the error, and a later seed still gets its supplement', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    await h.release();
+    await h.answer(result(500, { error: 'boom' }));
+    expect(h.state.store['a.json'].status).toBe('error');
+    expect(h.state.store['a.json'].primeFailed).toBe(true);
+    // Re-run on the error itself: nothing to ask for.
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    expect(h.waiting()).toBe(0);
+    h.state.store = seedDerivedQuota(
+      [entry('a.json')],
+      h.state.store,
+      { ...adapter, deriveQuota: () => seeded(3) },
+      t
+    )!;
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    expect(h.waiting()).toBe(1);
+    await h.release();
+    await h.answer(result(200, statusBody()));
+    expect((h.state.store['a.json'] as ClaudeQuotaState).resets?.grants).toHaveLength(1);
+  });
+
+  test('a prime that fails after a seed painted the card asks for its supplement itself', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    await h.release();
+    h.state.store = { 'a.json': seeded(4) };
+    await h.answer(result(500, { error: 'boom' }));
+    // The seed stands, and the store did not change, so no re-render would ask for it.
+    expect(h.state.store['a.json'].observedAtMs).toBe(4);
+    expect(h.waiting()).toBe(1);
+    await h.release();
+    await h.answer(result(200, statusBody()));
+    expect((h.state.store['a.json'] as ClaudeQuotaState).resets?.grants).toHaveLength(1);
+  });
+
+  test('a click while the prime waits makes it moot', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    h.state.store = { 'a.json': { status: 'loading' } };
+    await h.release();
+    expect(h.answers).toHaveLength(0);
+    expect(h.state.store['a.json'].status).toBe('loading');
+  });
+
+  test('a cleared cache sends nothing it asked for and writes nothing', async () => {
+    const h = harness();
+    scheduleFreeReads([entry('a.json')], h.ctx);
+    h.state.current = false;
+    await h.release();
+    expect(h.answers).toHaveLength(0);
+    expect(h.state.store).toEqual({});
+  });
+
+  test('what was asked for outlives a mount of the page, until the cache is cleared', () => {
+    const first = freeReadsAskedIn(41);
+    first.add('claude:a.json');
+    expect(freeReadsAskedIn(41).has('claude:a.json')).toBe(true);
+    expect(freeReadsAskedIn(42).has('claude:a.json')).toBe(false);
   });
 });
 

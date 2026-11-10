@@ -203,11 +203,24 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
           {t(`${adapter.i18nPrefix}.idle`)}
         </button>
       ) : quotaStatus === 'error' ? (
-        <div className={styles.quotaError}>
-          {t(`${adapter.i18nPrefix}.load_failed`, {
-            message: quotaErrorMessage,
-          })}
-        </div>
+        <>
+          <div className={styles.quotaError}>
+            {t(`${adapter.i18nPrefix}.load_failed`, {
+              message: quotaErrorMessage,
+            })}
+          </div>
+          {/* The quota page paints a seat nothing has painted on its own (a prime), so an
+              error here may be one nobody on this page asked for: it keeps the way in
+              the idle card offered, as the quota page's error card does. */}
+          <button
+            type="button"
+            className={`${styles.quotaMessage} ${styles.quotaMessageAction}`}
+            onClick={() => void refreshQuotaForFile()}
+            disabled={!canRefreshQuota}
+          >
+            {t('auth_files.quota_refresh_single')}
+          </button>
+        </>
       ) : quota ? (
         <adapter.Body quota={quota} classes={compactQuotaClasses} />
       ) : (

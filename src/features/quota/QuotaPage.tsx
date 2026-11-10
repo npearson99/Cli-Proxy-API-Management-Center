@@ -4,9 +4,9 @@
  * 保留的行为契约（重设计不改）：
  * - 免费优先：卡片先用 auth-files 自带的限流表头填满（零上游请求），
  *   只有用户点击/刷新才真正打上游，且一律经 fetchQueue 限流；
- *   例外是 supplementQuota：表头给不出的数据（Claude 储备重置）每卡一次，同样限流；
- *   以及 primeQuota：表头里什么都没有的卡（Claude 自代理启动后未服务过的座位），
- *   每卡一次读取即铺满整卡（窗口 + 储备重置），同样限流；
+ *   例外是每卡每代一次的免费读取（见 supplement.ts），同样限流：表头里什么都没有的卡
+ *   （Claude 自代理启动后未服务过的座位）用 primeQuota 一次铺满整卡（窗口 + 储备重置），
+ *   已填充的卡用 supplementQuota 只补表头给不出的数据（Claude 储备重置），两者绝不重复发；
  * - cacheGeneration 会话隔离 + request-id 去重（见 useQuotaBatchLoader）；
  * - 文件列表变化后按 provider 剪枝额度缓存（已删文件不残留）；
  * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表。
@@ -30,7 +30,6 @@ import {
   useThemeStore,
 } from '@/stores';
 import type { AuthFileItem, ResolvedTheme } from '@/types';
-import { getStatusFromError } from '@/utils/quota';
 import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
@@ -55,16 +54,7 @@ import {
 } from './logic';
 import { seedDerivedQuota } from './derivedSeed';
 import { quotaFetchQueueFor } from './fetchQueue';
-import {
-  mergePrime,
-  mergeSupplement,
-  pendingPrimes,
-  pendingSupplements,
-  primeKey,
-  stillNeedsPrime,
-  stillNeedsSupplement,
-  supplementKey,
-} from './supplement';
+import { freeReadsAskedIn, scheduleFreeReads } from './supplement';
 import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
 import { summarizeWeeklyCapacity } from './weeklyCapacity';
 import { QUOTA_ADAPTERS, getQuotaMap, getQuotaSetter, type QuotaCardState } from './providers';
@@ -251,6 +241,9 @@ export function QuotaPage() {
   }, [entries, loading]);
 
   // 免费填充：auth-files 自带的限流表头就是额度本身，先把卡片铺满，再决定要不要联网。
+  // A cleared cache seeds again before the effect below decides what each card still
+  // needs, or every card the listing could paint for free would be primed instead.
+  const cacheGeneration = useQuotaStore((state) => state.cacheGeneration);
   useEffect(() => {
     if (loading) return;
     QUOTA_TAB_ORDER.forEach((type) => {
@@ -258,82 +251,30 @@ export function QuotaPage() {
       if (!adapter.deriveQuota) return;
       getQuotaSetter(adapter)((prev) => seedDerivedQuota(entries, prev, adapter, t) ?? prev);
     });
-  }, [entries, loading, t]);
+  }, [entries, loading, t, cacheGeneration]);
 
-  // 补全：免费填充给不出的数据（Claude 储备重置）每卡每代只取一次，走同一限流队列。
-  // Keyed per cache generation: a cleared cache asks again, nothing else does.
-  const supplementRequestedRef = useRef<{ generation: number; keys: Set<string> }>({
-    generation: -1,
-    keys: new Set(),
-  });
+  // 免费读取：免费填充给不出的数据每卡每代只取一次（表头里什么都没有的卡整卡 prime，
+  // 已填充的卡只补 Claude 储备重置），走同一限流队列。Re-run on every store change, since a
+  // seed or a failed prime is what makes a card want its read; what was asked for is kept
+  // per cache generation across mounts (see freeReadsAskedIn).
   useEffect(() => {
     if (loading) return;
     const generation = captureQuotaCacheGeneration();
-    const requested = supplementRequestedRef.current;
-    if (requested.generation !== generation) {
-      requested.generation = generation;
-      requested.keys = new Set();
-    }
+    const asked = freeReadsAskedIn(generation);
     QUOTA_TAB_ORDER.forEach((type) => {
       const adapter = QUOTA_ADAPTERS[type];
-      const prime = adapter.primeQuota;
-      // The store, not this render's snapshot: the seed effect above has already
-      // painted what the listing carries, and those cards need no prime.
-      if (prime) {
-        pendingPrimes(entries, getQuotaMap(adapter), adapter, requested.keys).forEach((entry) => {
-          requested.keys.add(primeKey(entry));
-          void quotaFetchQueueFor(type)
-            .run(async (): Promise<QuotaCardState | null> => {
-              if (captureQuotaCacheGeneration() !== generation) return null;
-              if (!stillNeedsPrime(getQuotaMap(adapter), entry.file.name)) return null;
-              try {
-                return adapter.buildSuccessState(await prime(entry.file, t));
-              } catch (err: unknown) {
-                const message = err instanceof Error ? err.message : t('common.unknown_error');
-                // Nobody asked for this read, so a seed may replace what it failed with.
-                return {
-                  ...adapter.buildErrorState(message, getStatusFromError(err)),
-                  primeFailed: true,
-                };
-              }
-            })
-            .then((primed) => {
-              if (!primed) return;
-              commitIfQuotaCacheCurrent(generation, () => {
-                getQuotaSetter(adapter)(
-                  (prev) => mergePrime(prev, entry.file.name, primed) ?? prev
-                );
-              });
-            })
-            .catch(() => undefined);
-        });
-      }
-
-      const supplement = adapter.supplementQuota;
-      if (!supplement) return;
-      const pending = pendingSupplements(entries, quotaByType[type], adapter, requested.keys);
-      pending.forEach((entry) => {
-        requested.keys.add(supplementKey(entry));
-        void quotaFetchQueueFor(type)
-          .run(async () => {
-            // Asked again once the queue releases it: a cleared cache or a live fetch
-            // that started while it waited has made the request moot.
-            if (captureQuotaCacheGeneration() !== generation) return null;
-            if (!stillNeedsSupplement(getQuotaMap(adapter), entry.file.name, adapter)) {
-              return null;
-            }
-            return supplement(entry.file, t);
-          })
-          .then((patch) => {
-            if (!patch) return;
-            commitIfQuotaCacheCurrent(generation, () => {
-              getQuotaSetter(adapter)(
-                (prev) => mergeSupplement(prev, entry.file.name, patch, adapter) ?? prev
-              );
-            });
-          })
-          // A supplement reports its own failure in the patch; a throw leaves the card as is.
-          .catch(() => undefined);
+      void scheduleFreeReads(entries, {
+        adapter,
+        t,
+        queue: quotaFetchQueueFor(type),
+        asked,
+        isCurrent: () => captureQuotaCacheGeneration() === generation,
+        // The store, not this render's snapshot: the seed effect above has already
+        // painted what the listing carries, and those cards need no prime.
+        read: () => getQuotaMap(adapter),
+        write: (update) => {
+          commitIfQuotaCacheCurrent(generation, () => getQuotaSetter(adapter)(update));
+        },
       });
     });
   }, [entries, loading, quotaByType, t]);

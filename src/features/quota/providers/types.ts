@@ -60,11 +60,13 @@ export interface QuotaProviderData<TState, TData, TOption = never> {
    */
   deriveQuota?: (file: AuthFileItem, t: TFunction) => TState | null;
   /**
-   * One read that paints a card neither the listing nor a fetch has painted, run once
-   * per card per cache generation through the provider's paced queue. For a provider
-   * whose cheapest live read already carries everything a card shows, so painting a
-   * card costs the one request its supplement would have cost anyway. Throws like
-   * `fetchQuota`; the card then shows the error.
+   * One read that paints a card neither the listing nor a fetch has painted, through
+   * the provider's paced queue. For a provider whose cheapest live read already carries
+   * everything a card shows, so painting a card costs the one request its supplement
+   * would have cost anyway: the two are the card's one free read per cache generation
+   * (see supplement.ts), and a successful answer that finds the card seeded meanwhile
+   * lands as its supplement through `carrySupplement`. Throws like `fetchQuota`; the
+   * card then shows the error.
    */
   primeQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;
   /** `option` is what `describeReset` chose to spend, when the provider has a choice. */
@@ -89,7 +91,10 @@ export interface QuotaProviderData<TState, TData, TOption = never> {
    */
   supplementQuota?: (file: AuthFileItem, t: TFunction) => Promise<Partial<TState>>;
   needsSupplement?: (quota: TState) => boolean;
-  /** Copies the supplement onto a newer seed replacing a card that already had it. */
+  /**
+   * Copies the supplement from `from` onto `to`: onto a newer seed replacing a card that
+   * already had it, and from a prime's answer onto a seed that painted the card first.
+   */
   carrySupplement?: (from: TState, to: TState) => TState;
   storeSelector: (state: QuotaStore) => Record<string, TState>;
   storeSetter: keyof QuotaStore;
