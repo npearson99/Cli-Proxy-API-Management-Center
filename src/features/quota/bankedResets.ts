@@ -14,8 +14,14 @@ import type { ClaudeResetInfo } from '@/types';
 import { isClaimableClaudeGrant, parseIsoToMs } from '@/utils/quota';
 import type { QuotaProviderType } from './providers/types';
 
+/**
+ * The Fable group's key. A colon is outside the grant-id alphabet (CLAUDE_RESET_GRANT_ID),
+ * so no grant id can land in the Fable group, nor a Fable reset in a grant's own.
+ */
+export const BANKED_FABLE_KEY = ':fable';
+
 export interface BankedResetGroup {
-  /** `fable` for every Fable reset, otherwise the grant id. */
+  /** BANKED_FABLE_KEY for every Fable reset, otherwise the grant id. */
   key: string;
   fable: boolean;
   /** Anthropic's label for a grant; empty for the Fable group, which the page names. */
@@ -32,7 +38,10 @@ export interface BankedResetGroup {
 
 export interface BankedResetSummary {
   groups: BankedResetGroup[];
-  /** Claude seats whose reset status was read, and all Claude seats in view. */
+  /**
+   * Claude seats whose reset status was read (ineligible ones included: they hold
+   * none), and all Claude seats in view.
+   */
   read: number;
   total: number;
 }
@@ -50,11 +59,13 @@ export function summarizeBankedResets(
     if (entry.type !== 'claude') continue;
     total += 1;
     const info = (quotaFor(entry) as { resets?: ClaudeResetInfo } | undefined)?.resets;
-    if (!info || info.error || !info.eligible) continue;
+    if (!info || info.error) continue;
+    // An ineligible seat was read and holds nothing; it is not one still to be counted.
     read += 1;
+    if (!info.eligible) continue;
     for (const grant of info.grants) {
       if (grant.resetsLeft <= 0) continue;
-      const key = grant.givesBackWeekly ? 'fable' : grant.id;
+      const key = grant.givesBackWeekly ? BANKED_FABLE_KEY : grant.id;
       const group = groups.get(key) ?? {
         key,
         fable: grant.givesBackWeekly,

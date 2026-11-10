@@ -16,7 +16,11 @@ export function BankedResets({ summary }: { summary: BankedResetSummary }) {
   if (summary.groups.length === 0) return null;
 
   return (
-    <section className={strip.strip} data-reveal aria-label={t('quota_management.banked_aria')}>
+    <section
+      className={`${strip.strip} ${styles.banked}`}
+      data-reveal
+      aria-label={t('quota_management.banked_aria')}
+    >
       <div className={strip.heading}>
         <span className={strip.title}>
           {t('quota_management.banked_title', { timezone: resolveTimeZoneLabel() })}

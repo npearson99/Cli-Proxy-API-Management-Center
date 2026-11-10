@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { summarizeBankedResets } from '@/features/quota/bankedResets';
+import { BANKED_FABLE_KEY, summarizeBankedResets } from '@/features/quota/bankedResets';
 import type { QuotaProviderType } from '@/features/quota/providers/types';
 import { parseClaudeResetInfo } from '@/utils/quota';
 
@@ -63,7 +63,8 @@ const entry = (name: string, type: QuotaProviderType = 'claude'): Entry => ({
 describe("the fleet's banked Claude resets", () => {
   test('one line per grant id, every Fable reset on one, soonest use-by first', () => {
     const states: Record<string, unknown> = {
-      'weekly-out.json': seat([fullReset({ seven_day: 100 }), fableReset('launch-2610-fable')]),
+      // The Fable reset is met first, so only the sort can put the full reset ahead.
+      'weekly-out.json': seat([fableReset('launch-2610-fable'), fullReset({ seven_day: 100 })]),
       'fable-out.json': seat(
         [
           fullReset({ seven_day: 52, seven_day_overage_included: 100 }),
@@ -93,14 +94,47 @@ describe("the fleet's banked Claude resets", () => {
       // The idle seat's full reset would give back nothing: held, not usable.
       ['full-reset-2611', 4, 4, 3],
       // Fable resets give back nothing where Fable spent nothing.
-      ['fable', 3, 2, 2],
+      [BANKED_FABLE_KEY, 3, 2, 2],
     ]);
     expect(summary.groups[0].label).toBe('One full limit reset (November 2026)');
     expect(summary.groups[0].endsAtMs).toBe(Date.parse('2026-12-10T22:00:00+00:00'));
     expect(summary.groups[1].fable).toBe(true);
   });
 
-  test('spent, unread, ineligible and failed seats add nothing but say how many were read', () => {
+  test('a group dates from its soonest use-by on any seat; undated groups go last', () => {
+    const states: Record<string, unknown> = {
+      'a.json': seat(
+        [
+          fableReset('launch-2610-fable'),
+          fullReset({ seven_day: 40 }, { id: 'undated', ends_at: null }),
+        ],
+        20
+      ),
+      'b.json': seat([fableReset('launch-2611-fable', { ends_at: '2026-11-30T08:00:00+00:00' })], 20),
+      'c.json': seat([fullReset({ seven_day: 40 })]),
+    };
+    const summary = summarizeBankedResets(
+      Object.keys(states).map((name) => entry(name)),
+      (e) => states[e.file.name]
+    );
+    expect(summary.groups.map((g) => [g.key, g.endsAtMs])).toEqual([
+      [BANKED_FABLE_KEY, Date.parse('2026-11-30T08:00:00+00:00')],
+      ['full-reset-2611', Date.parse('2026-12-10T22:00:00+00:00')],
+      ['undated', null],
+    ]);
+  });
+
+  test('a grant whose id is "fable" is its own line, not the Fable resets', () => {
+    const summary = summarizeBankedResets([entry('a.json')], () =>
+      seat([fullReset({ seven_day: 40 }, { id: 'fable', label: 'Odd' }), fableReset('x')], 20)
+    );
+    expect(summary.groups.map((g) => [g.key, g.fable, g.left])).toEqual([
+      ['fable', false, 1],
+      [BANKED_FABLE_KEY, true, 1],
+    ]);
+  });
+
+  test('spent, unread, ineligible and failed seats add nothing; spent and ineligible were read', () => {
     const states: Record<string, unknown> = {
       'spent.json': seat([fullReset({ seven_day: 50 }, { resets_left: 0 })]),
       'ineligible.json': seat([fullReset({ seven_day: 50 })], 0, { eligible: false }),
@@ -110,6 +144,7 @@ describe("the fleet's banked Claude resets", () => {
       ['spent.json', 'ineligible.json', 'failed.json', 'unread.json'].map((name) => entry(name)),
       (e) => states[e.file.name]
     );
-    expect(summary).toEqual({ groups: [], read: 1, total: 4 });
+    // Only the failed and the unread seat are still to be counted.
+    expect(summary).toEqual({ groups: [], read: 2, total: 4 });
   });
 });

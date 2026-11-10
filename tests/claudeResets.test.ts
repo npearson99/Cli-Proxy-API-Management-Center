@@ -41,6 +41,8 @@ import {
   CLAUDE_RESET_STATUS_URL,
   CLAUDE_USAGE_URL,
   classifyClaudeResetClaim,
+  claudeGrantGivesNothingBack,
+  claudeGrantWeeklyGiveBack,
   claudeResetKind,
   claudeResetReason,
   claudeResetReasonKey,
@@ -297,6 +299,56 @@ describe('which grant a claim spends', () => {
     expect(pickClaudeResetGrant(unknown)?.id).toBe('fable');
   });
 
+  test('gives nothing back only on a reading of 0% for every window it clears', () => {
+    const grantOf = (overrides: Record<string, unknown>) =>
+      parseClaudeResetGrant(
+        usable('g', { gives_back_weekly: false, type: 'weekly', ...overrides })
+      )!;
+    const seat = infoNoShare();
+    const nothing = (overrides: Record<string, unknown>) =>
+      claudeGrantGivesNothingBack(grantOf(overrides), seat);
+    // No window to read: not known to give nothing.
+    expect(nothing({ clears: [], percent_used: {} })).toBe(false);
+    // A window with no reading, or one that is malformed and dropped, is not 0%.
+    expect(nothing({ clears: ['seven_day'], percent_used: {} })).toBe(false);
+    expect(nothing({ clears: ['seven_day'], percent_used: { seven_day: '0' } })).toBe(false);
+    expect(nothing({ clears: ['seven_day'], percent_used: { seven_day: 0.5 } })).toBe(false);
+    // Any window with use gives that back.
+    expect(
+      nothing({ clears: ['five_hour', 'seven_day'], percent_used: { five_hour: 3, seven_day: 0 } })
+    ).toBe(false);
+    expect(
+      nothing({ clears: ['five_hour', 'seven_day'], percent_used: { five_hour: 0, seven_day: 0 } })
+    ).toBe(true);
+    // A Fable reset reads Fable's share, never the grant's own percent_used.
+    const fable = parseClaudeResetGrant(usable('f', { percent_used: { five_hour: 0 } }))!;
+    expect(claudeGrantGivesNothingBack(fable, info())).toBe(false);
+    expect(claudeGrantGivesNothingBack(fable, seat)).toBe(true);
+  });
+
+  test("what a grant gives back to the weekly: Fable's share, or the weekly's own reading", () => {
+    const fable = parseClaudeResetGrant(usable('f'))!;
+    expect(claudeGrantWeeklyGiveBack(fable, info())).toBe(12);
+    const weekly = (overrides: Record<string, unknown>) =>
+      parseClaudeResetGrant(usable('w', { gives_back_weekly: false, type: 'weekly', ...overrides }))!;
+    expect(
+      claudeGrantWeeklyGiveBack(
+        weekly({ clears: ['seven_day'], percent_used: { seven_day: 52 } }),
+        info()
+      )
+    ).toBe(52);
+    expect(
+      claudeGrantWeeklyGiveBack(weekly({ clears: ['seven_day'], percent_used: {} }), info())
+    ).toBeNull();
+    // It does not clear the weekly, whatever the weekly reads.
+    expect(
+      claudeGrantWeeklyGiveBack(
+        weekly({ clears: ['five_hour'], percent_used: { five_hour: 80, seven_day: 52 } }),
+        info()
+      )
+    ).toBeNull();
+  });
+
   test('nothing on an ineligible seat or one whose status failed', () => {
     expect(pickClaudeResetGrant(info({ eligible: false, grants: [usable('a')] }))).toBeNull();
     expect(pickClaudeResetGrant(parseClaudeResetInfo(null, 'invalid'))).toBeNull();
@@ -401,6 +453,36 @@ describe('claiming a reset', () => {
     const error = (await claimClaudeReset(file, t, choice).catch((err) => err)) as Error;
     expect(error.message).toContain('claude_quota.reset_not_claimed');
     expect(error.message).toContain('reset_reason_nothing_to_give_back');
+    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  test('spends nothing on a full limit reset whose every window reads 0%, and says why', async () => {
+    const idle = {
+      id: 'full-reset-2611',
+      label: 'One full limit reset (November 2026)',
+      resets_total: 1,
+      resets_left: 1,
+      ends_at: '2026-12-10T22:00:00+00:00',
+      clears: ['seven_day', 'seven_day_overage_included'],
+      usable_now: true,
+      paused: false,
+      use_requires_limit: false,
+      percent_used: { seven_day: 0, seven_day_overage_included: 0 },
+      type: 'weekly',
+      gives_back_weekly: false,
+    };
+    route((payload) => {
+      if (payload.url === CLAUDE_RESET_STATUS_URL)
+        return result(200, statusBody({ grants: [idle] }));
+      throw new Error(`unexpected url ${payload.url}`);
+    });
+    const error = (await claimClaudeReset(file, t, {
+      grantId: 'full-reset-2611',
+      atLimit: false,
+    }).catch((err) => err)) as Error;
+    expect(error.message).toContain('claude_quota.reset_not_claimed');
+    expect(error.message).toContain('reset_reason_nothing_used');
+    expect(error.message).not.toContain('nothing_to_give_back');
     expect(calls.some((call) => call.method === 'POST')).toBe(false);
   });
 

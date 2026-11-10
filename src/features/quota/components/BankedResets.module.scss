@@ -2,6 +2,14 @@
 
 /* 车队储备重置：每类一行，最早到期的在前；数值沿用容量条的 mono / tabular 语汇。 */
 
+/* The layout follows the strip's own width, not the viewport's: beside an open sidebar a
+ * wide window still leaves a narrow strip. */
+.banked {
+  container-type: inline-size;
+}
+
+/* Wide: one aligned row per group. The three figures never wrap, so the grid holds only
+ * where they fit beside a readable name (Russian's are the longest, ~620px). */
 .list {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) auto auto auto;
@@ -48,8 +56,25 @@
   color: var(--text-secondary);
 }
 
-@media (max-width: 720px) {
+/* Narrow: each group is a block, its name on a line of its own and the figures below,
+ * wrapping among themselves. A two-column grid put a group's figures in the name column
+ * and let them run into the deadline. */
+@container (max-width: 760px) {
   .list {
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 14px;
+    min-width: 0;
+  }
+
+  .name {
+    flex: 1 0 100%;
   }
 }

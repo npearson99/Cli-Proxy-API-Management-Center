@@ -89,11 +89,13 @@ function ClaudeResetGrants({
         const weeklyBack = claudeGrantWeeklyGiveBack(grant, resets);
         let status: string;
         if (claimable) {
+          // A claimable grant at 0% weekly gives back another window it clears (the
+          // 5-hour one), or one with no reading: "gives back 0%" would read as nothing.
           status = grant.givesBackWeekly
             ? t('claude_quota.reset_usable_gives_back', {
                 share: describeClaudeFableShare(resets, t),
               })
-            : weeklyBack !== null
+            : weeklyBack !== null && weeklyBack > 0
               ? t('claude_quota.reset_usable_gives_back', { share: `${Math.round(weeklyBack)}%` })
               : t('claude_quota.reset_usable');
         } else if (isUsableClaudeGrant(grant) && claudeGrantGivesNothingBack(grant, resets)) {

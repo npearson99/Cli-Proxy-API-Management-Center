@@ -265,7 +265,23 @@ describe('ClaudeQuotaBody', () => {
     const quota = withGrants([fullLimitReset({ seven_day: 0, seven_day_overage_included: 0 })]);
     const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
     expect(markup).toContain('nothing used yet to give back');
-    expect(markup).not.toContain('usable now');
+    // Neither the row's "Usable now" nor the count's "N usable now".
+    expect(markup.toLowerCase()).not.toContain('usable now');
+  });
+
+  test('at 0% of the weekly it does not say it gives back 0% while the 5-hour is spent', () => {
+    const quota = withGrants([
+      grant({
+        id: 'full-reset-2611',
+        type: 'full',
+        clears: ['five_hour', 'seven_day', 'seven_day_overage_included'],
+        percent_used: { five_hour: 80, seven_day: 0, seven_day_overage_included: 0 },
+        use_requires_limit: false,
+      }),
+    ]);
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+    expect(markup).toContain('Usable now');
+    expect(markup).not.toContain('gives back 0%');
   });
 
   test('a grant in its last hour takes the emphasis, and only then', () => {

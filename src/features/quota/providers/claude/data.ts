@@ -513,7 +513,8 @@ const claimOnce = async (
   if (!grant) throw refuse(t('claude_quota.reset_grant_gone'));
   if (retry && retry.grantId !== grant.id) retry = undefined;
   if (!isUsableClaudeGrant(grant)) throw refuse(describeClaudeResetReason(grant, info, t));
-  // Fable may have spent nothing since the dialog opened: re-checked on the fresh read.
+  // The grant may give back nothing on the fresh read (Fable spent none of the week, or
+  // every window it clears reads 0%), whatever the card showed when the dialog opened.
   if (claudeGrantGivesNothingBack(grant, info)) {
     throw refuse(t(claudeNothingBackKey(grant)));
   }
