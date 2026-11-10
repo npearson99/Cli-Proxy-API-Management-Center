@@ -8,6 +8,7 @@ import type { ClaudeQuotaState, ClaudeResetInfo } from '@/types';
 import {
   buildResetDisplay,
   claudeGrantGivesNothingBack,
+  claudeGrantWeeklyGiveBack,
   claudeResetKind,
   formatInstantShort,
   formatRelativeInstant,
@@ -16,7 +17,7 @@ import {
   parseIsoToMs,
 } from '@/utils/quota';
 import { resolveTimeZoneLabel } from '@/utils/time/timezone';
-import { describeClaudeFableShare, describeClaudeResetReason } from './data';
+import { claudeNothingBackKey, describeClaudeFableShare, describeClaudeResetReason } from './data';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
@@ -85,14 +86,19 @@ function ClaudeResetGrants({
           locale
         );
         const claimable = isClaimableClaudeGrant(grant, resets);
+        const weeklyBack = claudeGrantWeeklyGiveBack(grant, resets);
         let status: string;
         if (claimable) {
           status = grant.givesBackWeekly
-            ? t('claude_quota.reset_usable_fable', { share: describeClaudeFableShare(resets, t) })
-            : t('claude_quota.reset_usable');
+            ? t('claude_quota.reset_usable_gives_back', {
+                share: describeClaudeFableShare(resets, t),
+              })
+            : weeklyBack !== null
+              ? t('claude_quota.reset_usable_gives_back', { share: `${Math.round(weeklyBack)}%` })
+              : t('claude_quota.reset_usable');
         } else if (isUsableClaudeGrant(grant) && claudeGrantGivesNothingBack(grant, resets)) {
-          // Usable, but a Fable reset at a 0% share returns nothing; not offered.
-          status = t('claude_quota.reset_reason_nothing_to_give_back');
+          // Usable, but it would return nothing and the grant would be gone; not offered.
+          status = t(claudeNothingBackKey(grant));
         } else {
           status = describeClaudeResetReason(grant, resets, t);
         }

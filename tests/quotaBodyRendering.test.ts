@@ -244,6 +244,30 @@ describe('ClaudeQuotaBody', () => {
     expect(markup).not.toContain('Resets left');
   });
 
+  /** The November 2026 full limit reset on a seat with no 5-hour window. */
+  const fullLimitReset = (percentUsed: Record<string, number>) =>
+    grant({
+      id: 'full-reset-2611',
+      label: 'One full limit reset (November 2026)',
+      clears: ['seven_day', 'seven_day_overage_included'],
+      percent_used: percentUsed,
+      use_requires_limit: false,
+    });
+
+  test('the full limit reset says what it gives back to the weekly', () => {
+    const quota = withGrants([fullLimitReset({ seven_day: 100, seven_day_overage_included: 0 })]);
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+    expect(markup).toContain('One full limit reset (November 2026)');
+    expect(markup).toContain('Usable now · gives back 100% of the weekly limit');
+  });
+
+  test('on an idle seat it is not offered: it would give back nothing', () => {
+    const quota = withGrants([fullLimitReset({ seven_day: 0, seven_day_overage_included: 0 })]);
+    const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+    expect(markup).toContain('nothing used yet to give back');
+    expect(markup).not.toContain('usable now');
+  });
+
   test('a grant in its last hour takes the emphasis, and only then', () => {
     const later = renderToStaticMarkup(
       createElement(ClaudeQuotaBody, { quota: withGrants([grant()]), classes })

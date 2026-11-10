@@ -16,7 +16,9 @@ const result = (statusCode: number, body: unknown = null): ApiCallResult => ({
 });
 
 /** Anthropic's answer to a *dead* token on the usage endpoint — a rate-limit error. */
-const RATE_LIMITED = { error: { type: 'rate_limit_error', message: 'Rate limited. Please try again later.' } };
+const RATE_LIMITED = {
+  error: { type: 'rate_limit_error', message: 'Rate limited. Please try again later.' },
+};
 const TOKEN_EXPIRED = {
   type: 'error',
   error: { type: 'authentication_error', message: 'OAuth access token has expired.' },

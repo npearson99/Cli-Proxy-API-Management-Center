@@ -464,7 +464,7 @@
     "reset_kind_weekly": "周重置",
     "reset_kind_full": "完整重置",
     "reset_usable": "现在可用",
-    "reset_usable_fable": "现在可用 · 可退回周限额的 {{share}}",
+    "reset_usable_gives_back": "现在可用 · 可退回周限额的 {{share}}",
     "reset_share_unknown": "未知比例",
     "reset_paused": "已暂停",
     "reset_none_left": "已用完",
@@ -477,7 +477,8 @@
     "reset_reason_cannot_clear": "无法恢复已达到的限额",
     "reset_reason_needs_limit": "达到它可恢复的限额后才能使用",
     "reset_reason_unavailable": "现在无法使用",
-    "reset_reason_nothing_to_give_back": "本周没有 Fable 用量可退回"
+    "reset_reason_nothing_to_give_back": "本周没有 Fable 用量可退回",
+    "reset_reason_nothing_used": "尚无用量可返还"
   },
   "codex_quota": {
     "title": "Codex 额度",
@@ -1217,6 +1218,12 @@
     "capacity_scope_fable": "Fable 5",
     "capacity_none_measured": "未加载",
     "capacity_partial": "仅统计已加载的凭证 —— 点「刷新全部」查看完整结果。",
+    "banked_aria": "Claude 储备重置",
+    "banked_title": "Claude 储备重置 · 截止（{{timezone}}）",
+    "banked_fable": "Fable 重置",
+    "banked_left_other": "{{count}} 个席位共剩 {{left}} 次",
+    "banked_usable_other": "当前可用 {{count}} 次",
+    "banked_partial_other": "已读取 {{read}}/{{count}} 个席位，其余暂未计入。",
     "meta_credentials": "{{count}} 个凭证",
     "meta_loaded": "{{count}} 个已加载",
     "meta_attention": "{{count}} 个需关注",

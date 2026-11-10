@@ -209,9 +209,7 @@ describe('quota fetch queue', () => {
   test('returns each task its own result, in the face of queueing', async () => {
     const clock = harness();
     const queue = createFetchQueue({ concurrency: 2, minGapMs: 10, ...clock });
-    const results = await Promise.all(
-      [1, 2, 3, 4, 5].map((n) => queue.run(async () => n * 2))
-    );
+    const results = await Promise.all([1, 2, 3, 4, 5].map((n) => queue.run(async () => n * 2)));
     expect(results).toEqual([2, 4, 6, 8, 10]);
   });
 });

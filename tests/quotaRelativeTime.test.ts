@@ -122,6 +122,8 @@ describe('buildResetDisplay', () => {
 
   test('rejects a non-finite instant', () => {
     expect(buildResetDisplay(undefined, Number.NaN, NOW, 'en')).toBeNull();
-    expect(buildResetDisplay('08-13 14:30', Number.POSITIVE_INFINITY, NOW, 'en')?.relative).toBeNull();
+    expect(
+      buildResetDisplay('08-13 14:30', Number.POSITIVE_INFINITY, NOW, 'en')?.relative
+    ).toBeNull();
   });
 });

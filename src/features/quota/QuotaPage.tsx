@@ -35,6 +35,7 @@ import { QuotaHeader } from './components/QuotaHeader';
 import { QuotaCard } from './components/QuotaCard';
 import { QuotaTimeline } from './components/QuotaTimeline';
 import { WeeklyCapacity } from './components/WeeklyCapacity';
+import { BankedResets } from './components/BankedResets';
 import {
   CARD_ENTRANCE_BUDGET_MS,
   QUOTA_DEFAULT_SORT_MODE,
@@ -57,6 +58,7 @@ import { quotaFetchQueueFor } from './fetchQueue';
 import { freeReadsAskedIn, scheduleFreeReads } from './supplement';
 import { QUOTA_SORT_KEY_RESOLVERS } from './resetSchedule';
 import { summarizeWeeklyCapacity } from './weeklyCapacity';
+import { summarizeBankedResets } from './bankedResets';
 import { QUOTA_ADAPTERS, getQuotaMap, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useQuotaActions } from './hooks/useQuotaActions';
@@ -205,6 +207,10 @@ export function QuotaPage() {
   // the fleet did not.
   const weeklyCapacity = useMemo(
     () => summarizeWeeklyCapacity(filteredEntries, getQuota),
+    [filteredEntries, getQuota]
+  );
+  const bankedResets = useMemo(
+    () => summarizeBankedResets(filteredEntries, getQuota),
     [filteredEntries, getQuota]
   );
 
@@ -363,6 +369,7 @@ export function QuotaPage() {
         </div>
 
         {!loading && <WeeklyCapacity summary={weeklyCapacity} resolvedTheme={resolvedTheme} />}
+        {!loading && <BankedResets summary={bankedResets} />}
 
         {error && (
           <div className={styles.errorBanner} role="alert">

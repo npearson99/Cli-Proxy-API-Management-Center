@@ -2,10 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { parse as parseYaml } from 'yaml';
-import {
-  parseDisableImageGenerationMode,
-  useVisualConfig,
-} from '../src/hooks/useVisualConfig';
+import { parseDisableImageGenerationMode, useVisualConfig } from '../src/hooks/useVisualConfig';
 
 describe('visual config disable-image-generation', () => {
   test('loads and writes the passthrough mode', () => {

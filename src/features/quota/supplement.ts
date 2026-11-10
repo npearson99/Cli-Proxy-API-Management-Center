@@ -138,14 +138,11 @@ export interface FreeReadContext {
   /** The adapter's cards as the store holds them when each step runs. */
   read: () => Record<string, QuotaCardState>;
   /** Commits an update to the adapter's cards, and only while `isCurrent`. */
-  write: (
-    update: (prev: Record<string, QuotaCardState>) => Record<string, QuotaCardState>
-  ) => void;
+  write: (update: (prev: Record<string, QuotaCardState>) => Record<string, QuotaCardState>) => void;
 }
 
 type FreeRead =
-  | { kind: 'prime'; state: QuotaCardState }
-  | { kind: 'supplement'; patch: Partial<QuotaCardState> };
+  { kind: 'prime'; state: QuotaCardState } | { kind: 'supplement'; patch: Partial<QuotaCardState> };
 
 /** The read the card wants now that the queue has let it go, or null when it wants none. */
 const sendFreeRead = async (

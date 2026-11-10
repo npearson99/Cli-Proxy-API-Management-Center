@@ -24,7 +24,12 @@ describe('seeding the quota grid from the auth-file listing', () => {
   });
 
   test('fills a card left idle', () => {
-    const next = seedDerivedQuota([entry('a.json')], { 'a.json': { status: 'idle' } }, adapter(1000), t);
+    const next = seedDerivedQuota(
+      [entry('a.json')],
+      { 'a.json': { status: 'idle' } },
+      adapter(1000),
+      t
+    );
     expect(next?.['a.json']).toEqual({ status: 'success', observedAtMs: 1000 });
   });
 
@@ -36,9 +41,16 @@ describe('seeding the quota grid from the auth-file listing', () => {
   });
 
   test('leaves a card mid-fetch and a card that failed alone', () => {
-    expect(seedDerivedQuota([entry('a.json')], { 'a.json': { status: 'loading' } }, adapter(1), t)).toBeNull();
     expect(
-      seedDerivedQuota([entry('a.json')], { 'a.json': { status: 'error', error: 'HTTP 429' } }, adapter(1), t)
+      seedDerivedQuota([entry('a.json')], { 'a.json': { status: 'loading' } }, adapter(1), t)
+    ).toBeNull();
+    expect(
+      seedDerivedQuota(
+        [entry('a.json')],
+        { 'a.json': { status: 'error', error: 'HTTP 429' } },
+        adapter(1),
+        t
+      )
     ).toBeNull();
   });
 
@@ -68,7 +80,9 @@ describe('seeding the quota grid from the auth-file listing', () => {
       'a.json': { status: 'success', observedAtMs: 1000 },
       'b.json': { status: 'success', observedAtMs: 1000 },
     };
-    expect(seedDerivedQuota([entry('a.json'), entry('b.json')], seeded, adapter(1000), t)).toBeNull();
+    expect(
+      seedDerivedQuota([entry('a.json'), entry('b.json')], seeded, adapter(1000), t)
+    ).toBeNull();
   });
 
   test('keeps the cards it did not touch', () => {

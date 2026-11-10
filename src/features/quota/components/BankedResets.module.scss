@@ -1,0 +1,55 @@
+@use '../../../styles/mixins' as *;
+
+/* 车队储备重置：每类一行，最早到期的在前；数值沿用容量条的 mono / tabular 语汇。 */
+
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) auto auto auto;
+  gap: 6px 18px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.item {
+  display: contents;
+}
+
+.name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count,
+.usable,
+.idle,
+.deadline {
+  font-family: $font-mono;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.count {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usable {
+  color: var(--viz-success);
+}
+
+.idle,
+.deadline {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .list {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}

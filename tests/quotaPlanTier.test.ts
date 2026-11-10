@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  ELITE_CODEX_PLAN_TYPE,
-  PREMIUM_CODEX_PLAN_TYPES,
-  resolvePlanTier,
-} from '@/utils/quota';
+import { ELITE_CODEX_PLAN_TYPE, PREMIUM_CODEX_PLAN_TYPES, resolvePlanTier } from '@/utils/quota';
 
 describe('resolvePlanTier', () => {
   test("elite wins for 'pro' even though it is also in the premium set (order contract)", () => {

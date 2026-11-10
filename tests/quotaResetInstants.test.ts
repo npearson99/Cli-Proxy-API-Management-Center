@@ -69,9 +69,7 @@ describe('resolveResetMs', () => {
 
   test('prefers an earlier candidate over a later one in the list', () => {
     // Order is priority, not chronology — callers list their preferred key first.
-    expect(resolveResetMs(['2026-01-01T00:00:00Z', 1_754_000_000])).toBe(
-      Date.UTC(2026, 0, 1)
-    );
+    expect(resolveResetMs(['2026-01-01T00:00:00Z', 1_754_000_000])).toBe(Date.UTC(2026, 0, 1));
   });
 
   test('returns null when nothing parses', () => {

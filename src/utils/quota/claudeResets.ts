@@ -256,14 +256,32 @@ export const isUsableClaudeGrant = (grant: ClaudeResetGrant): boolean =>
   grant.usableNow && !grant.paused && grant.resetsLeft > 0;
 
 /**
- * A Fable reset gives back what Fable spent of this week, so at a 0% share it gives
- * back nothing and the grant is gone. Anthropic still marks it usable; `cpa-route
- * claude reset` refuses it without --force, and this page does not offer it.
+ * A reset that would return 0%, and whose grant would still be gone. A Fable reset gives
+ * back what Fable spent of this week, so at a 0% share it gives back nothing. Any other
+ * grant gives back nothing when Anthropic reads every window it clears at 0% used (the
+ * November 2026 full limit reset on an idle seat). Anthropic still marks either usable;
+ * `cpa-route claude reset` refuses them without --force, and this page does not offer them.
  */
 export const claudeGrantGivesNothingBack = (
   grant: ClaudeResetGrant,
   info: ClaudeResetInfo
-): boolean => grant.givesBackWeekly && info.fableWeeklySharePercent === 0;
+): boolean => {
+  if (grant.givesBackWeekly) return info.fableWeeklySharePercent === 0;
+  return grant.clears.length > 0 && grant.clears.every((window) => grant.percentUsed[window] === 0);
+};
+
+/**
+ * What a grant would return to the weekly limit now, in percent: Fable's share for a
+ * Fable reset, the weekly's own reading for a grant that clears it, null when unknown.
+ */
+export const claudeGrantWeeklyGiveBack = (
+  grant: ClaudeResetGrant,
+  info: ClaudeResetInfo
+): number | null => {
+  if (grant.givesBackWeekly) return info.fableWeeklySharePercent;
+  if (!grant.clears.includes('seven_day')) return null;
+  return grant.percentUsed.seven_day ?? null;
+};
 
 /** A grant this page will spend: usable now, and not a Fable reset that returns 0%. */
 export const isClaimableClaudeGrant = (grant: ClaudeResetGrant, info: ClaudeResetInfo): boolean =>

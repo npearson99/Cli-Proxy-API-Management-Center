@@ -352,6 +352,12 @@ export const describeClaudeResetReason = (
   t: TFunction
 ): string => t(claudeResetReasonKey(grant, claudeResetReason(grant, info)));
 
+/** Why a usable grant is not offered: it would give back nothing. */
+export const claudeNothingBackKey = (grant: ClaudeResetGrant): string =>
+  grant.givesBackWeekly
+    ? 'claude_quota.reset_reason_nothing_to_give_back'
+    : 'claude_quota.reset_reason_nothing_used';
+
 /** What a Fable reset would give back now, in percent of the weekly limit. */
 export const describeClaudeFableShare = (info: ClaudeResetInfo, t: TFunction): string =>
   info.fableWeeklySharePercent === null
@@ -509,7 +515,7 @@ const claimOnce = async (
   if (!isUsableClaudeGrant(grant)) throw refuse(describeClaudeResetReason(grant, info, t));
   // Fable may have spent nothing since the dialog opened: re-checked on the fresh read.
   if (claudeGrantGivesNothingBack(grant, info)) {
-    throw refuse(t('claude_quota.reset_reason_nothing_to_give_back'));
+    throw refuse(t(claudeNothingBackKey(grant)));
   }
   // The dialog warns about headroom only when the card read none, and the card can be
   // hours old. A seat that has left its limit since was never warned about, and

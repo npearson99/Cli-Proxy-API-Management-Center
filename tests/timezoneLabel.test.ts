@@ -46,9 +46,7 @@ describe('resolveTimeZoneLabel', () => {
     // label has to follow the date the timestamps are being rendered for.
     const january = new Date(2026, 0, 15, 12);
     const july = new Date(2026, 6, 15, 12);
-    expect(resolveTimeZoneLabel(january)).toBe(
-      formatUtcOffsetLabel(-january.getTimezoneOffset())
-    );
+    expect(resolveTimeZoneLabel(january)).toBe(formatUtcOffsetLabel(-january.getTimezoneOffset()));
     expect(resolveTimeZoneLabel(july)).toBe(formatUtcOffsetLabel(-july.getTimezoneOffset()));
   });
 });

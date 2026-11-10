@@ -105,7 +105,11 @@ describe('Claude quota from harvested rate-limit headers', () => {
     expect(buildClaudeQuotaFromSignals(file(undefined), t, NOW)).toBeNull();
     expect(buildClaudeQuotaFromSignals(file({}), t, NOW)).toBeNull();
     expect(
-      buildClaudeQuotaFromSignals(file({ 'claude-opus-5': { observed_at: '', signals: {} } }), t, NOW)
+      buildClaudeQuotaFromSignals(
+        file({ 'claude-opus-5': { observed_at: '', signals: {} } }),
+        t,
+        NOW
+      )
     ).toBeNull();
   });
 
@@ -206,6 +210,8 @@ describe('Claude quota from harvested rate-limit headers', () => {
       NOW
     );
 
-    expect(result?.windows.find((window) => window.id === 'seven-day-fable')?.usedPercent).toBe(101);
+    expect(result?.windows.find((window) => window.id === 'seven-day-fable')?.usedPercent).toBe(
+      101
+    );
   });
 });

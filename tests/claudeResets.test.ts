@@ -266,11 +266,27 @@ describe('which grant a claim spends', () => {
   test('never a Fable reset that would give back 0%, as cpa-route refuses it', () => {
     const grants = [
       usable('fable'),
-      usable('weekly', { gives_back_weekly: false, type: 'weekly' }),
+      usable('weekly', {
+        gives_back_weekly: false,
+        type: 'weekly',
+        clears: ['seven_day'],
+        percent_used: { seven_day: 100 },
+      }),
     ];
     expect(pickClaudeResetGrant(infoNoShare({ grants, next_grant_id: 'fable' }))?.id).toBe(
       'weekly'
     );
+    // Nor any grant whose every window reads 0% used: the full limit reset on an idle seat.
+    const idle = usable('full-reset-2611', {
+      gives_back_weekly: false,
+      type: 'weekly',
+      clears: ['seven_day', 'seven_day_overage_included'],
+      percent_used: { seven_day: 0, seven_day_overage_included: 0 },
+    });
+    expect(pickClaudeResetGrant(infoNoShare({ grants: [idle] }))).toBeNull();
+    // A window it clears with no reading is not read as unused.
+    const unread = { ...idle, percent_used: { seven_day: 0 } };
+    expect(pickClaudeResetGrant(infoNoShare({ grants: [unread] }))?.id).toBe('full-reset-2611');
     expect(pickClaudeResetGrant(infoNoShare({ grants: [usable('fable')] }))).toBeNull();
     // An unknown share is not a zero one: the dialog says it is unknown.
     const unknown = parseClaudeResetInfo(
@@ -913,9 +929,12 @@ describe('priming a card nothing has painted', () => {
     };
     const primeFailed = { status: 'error', error: 'x', primeFailed: true } as QuotaCardState;
     const refreshFailed = { status: 'error', error: 'x' } as QuotaCardState;
-    const replaced = seedDerivedQuota([entry('a.json')], { 'a.json': primeFailed }, seedAdapter, t)?.[
-      'a.json'
-    ];
+    const replaced = seedDerivedQuota(
+      [entry('a.json')],
+      { 'a.json': primeFailed },
+      seedAdapter,
+      t
+    )?.['a.json'];
     expect(replaced?.observedAtMs).toBe(5);
     expect(replaced?.primeFailed).toBeUndefined();
     expect(
