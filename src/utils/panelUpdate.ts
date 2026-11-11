@@ -20,10 +20,25 @@ const SLACK_MS = 1_000;
 /** sessionStorage key: the served Last-Modified this tab last reloaded for. */
 export const PANEL_RELOADED_FOR_KEY = 'cpamc.panel-reloaded-for';
 
+/** document.lastModified's form for an instant: local time, MM/DD/YYYY HH:MM:SS, no zone. */
+export function documentLastModifiedForm(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 /** True when the served panel is newer than the loaded one. Unknown is not newer. */
 export function isNewerPanel(served: string | null | undefined, loaded: string): boolean {
   if (!served) return false;
-  const servedAt = Date.parse(served);
+  const servedInstant = Date.parse(served);
+  if (Number.isNaN(servedInstant)) return false;
+  // document.lastModified carries no offset, so in the hour a fall-back repeats it parses
+  // an hour early. The served time goes through the same form, so a file always compares
+  // equal to itself; inside that hour a newer file can read as older, never the reverse.
+  const servedAt = Date.parse(documentLastModifiedForm(servedInstant));
   const loadedAt = Date.parse(loaded);
   if (Number.isNaN(servedAt) || Number.isNaN(loadedAt)) return false;
   return servedAt - loadedAt >= SLACK_MS;
@@ -68,7 +83,9 @@ export type PanelUpdateAction = 'none' | 'reload' | 'offer';
 /**
  * Reload when nothing can be lost: as the page loads (it was served stale from cache),
  * or on a read-only page while the tab comes back or goes out of view. Anywhere else,
- * offer it: a reload mid-edit would lose the edit. A reload that came back with the same
+ * offer it: a reload mid-edit would lose the edit. An open dialog is offered too: on a
+ * read-only page it is a confirmation, or a reset or clear still in flight, which a
+ * reload would cut off with its outcome unknown. A reload that came back with the same
  * old page is not tried again, or a cache that will not let go would loop.
  */
 export function panelUpdateAction(args: {
@@ -77,11 +94,82 @@ export function panelUpdateAction(args: {
   moment: PanelCheckMoment;
   hash: string;
   reloadedFor: string | null;
+  dialogOpen: boolean;
 }): PanelUpdateAction {
-  const { served, loaded, moment, hash, reloadedFor } = args;
+  const { served, loaded, moment, hash, reloadedFor, dialogOpen } = args;
   if (!isNewerPanel(served, loaded)) return 'none';
   if (reloadedFor && reloadedFor === served) return 'offer';
+  if (dialogOpen) return 'offer';
   if (moment === 'load') return 'reload';
   if ((moment === 'return' || moment === 'hidden') && isReadOnlyRoute(hash)) return 'reload';
   return 'offer';
+}
+
+/** What the checker needs from the browser, so it can run without one in tests. */
+export interface PanelUpdateEnv {
+  readServed(): Promise<string | null>;
+  /** document.lastModified */
+  loaded(): string;
+  /** window.location.hash */
+  hash(): string;
+  dialogOpen(): boolean;
+  /** The served version this tab last reloaded for. */
+  reloadedFor(): string | null;
+  /** Records the version a reload is for; false when it could not be recorded. */
+  recordReload(served: string): boolean;
+  reload(): void;
+  /** A newer panel is waiting for a reload the checker will not do on its own. */
+  offer(): void;
+}
+
+export interface PanelUpdateChecker {
+  check(moment: Exclude<PanelCheckMoment, 'hidden'>): Promise<void>;
+  /** The tab went out of view: act on a newer panel already found, without a read. */
+  hide(): void;
+  /** The banner's button: the user asked for it. */
+  reloadNow(): void;
+  /** After this, reads still in flight change nothing (StrictMode mounts twice). */
+  dispose(): void;
+}
+
+export function createPanelUpdateChecker(env: PanelUpdateEnv): PanelUpdateChecker {
+  let disposed = false;
+  let pending: string | null = null;
+
+  const act = (served: string | null, moment: PanelCheckMoment) => {
+    if (disposed) return;
+    const action = panelUpdateAction({
+      served,
+      loaded: env.loaded(),
+      moment,
+      hash: env.hash(),
+      reloadedFor: env.reloadedFor(),
+      dialogOpen: env.dialogOpen(),
+    });
+    if (action === 'none' || !served) return;
+    // A reload this tab cannot record is not tried: on a cache that will not let go it
+    // would come back to the same old page and reload again, forever.
+    if (action === 'reload' && env.recordReload(served)) {
+      env.reload();
+      return;
+    }
+    pending = served;
+    env.offer();
+  };
+
+  return {
+    async check(moment) {
+      act(await env.readServed(), moment);
+    },
+    hide() {
+      if (pending) act(pending, 'hidden');
+    },
+    reloadNow() {
+      if (pending) env.recordReload(pending);
+      env.reload();
+    },
+    dispose() {
+      disposed = true;
+    },
+  };
 }

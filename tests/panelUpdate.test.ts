@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createPanelUpdateChecker,
   isNewerPanel,
   isReadOnlyRoute,
   panelUpdateAction,
   readServedLastModified,
+  type PanelUpdateEnv,
 } from '@/utils/panelUpdate';
 
 // The release the quota page missed (tr.8), and what the stale tab ran before it.
@@ -43,6 +45,24 @@ describe('isNewerPanel', () => {
     const later = new Date(Date.parse(SERVED) + 1000).toUTCString();
     expect(isNewerPanel(later, documentForm(SERVED))).toBe(true);
   });
+
+  test('a panel installed in the repeated fall-back hour is not newer than itself', () => {
+    // document.lastModified has no offset: 1:30 AM PST on 2026-11-01 reads back as
+    // 1:30 AM PDT, an hour early. Compared as instants that looked like a newer panel,
+    // so every load reloaded once and then offered a banner for the rest of the session.
+    const original = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const secondPass = 'Sun, 01 Nov 2026 09:30:00 GMT'; // 1:30 AM PST
+      expect(documentForm(secondPass)).toBe('11/01/2026 01:30:00');
+      expect(isNewerPanel(secondPass, documentForm(secondPass))).toBe(false);
+      // A release across the change is still newer: 12:30 AM PDT, then 1:30 AM PST.
+      expect(isNewerPanel(secondPass, documentForm('Sun, 01 Nov 2026 07:30:00 GMT'))).toBe(true);
+    } finally {
+      // Deleting TZ does not put Bun back on the test runner's UTC.
+      process.env.TZ = original ?? 'Etc/UTC';
+    }
+  });
 });
 
 describe('readServedLastModified', () => {
@@ -57,11 +77,14 @@ describe('readServedLastModified', () => {
     expect((seen[0].headers as Record<string, string>).Range).toBe('bytes=0-0');
   });
 
-  test('a server that ignores Range still answers', async () => {
-    const fake = (async () =>
-      new Response('<html>'.repeat(1000), { status: 200, headers: { 'Last-Modified': SERVED } })
-    ) as unknown as typeof fetch;
+  test('a server that ignores Range still answers, and the page is not downloaded', async () => {
+    const whole = new Response('<html>'.repeat(1000), {
+      status: 200,
+      headers: { 'Last-Modified': SERVED },
+    });
+    const fake = (async () => whole) as unknown as typeof fetch;
     expect(await readServedLastModified('/management.html', fake)).toBe(SERVED);
+    expect(whole.bodyUsed).toBe(true); // cancelled, not left streaming 2.9 MB
   });
 
   test('a failed or refused read is unknown, not an error', async () => {
@@ -90,7 +113,7 @@ describe('isReadOnlyRoute', () => {
 });
 
 describe('panelUpdateAction', () => {
-  const stale = { served: SERVED, loaded: documentForm(OLD), reloadedFor: null };
+  const stale = { served: SERVED, loaded: documentForm(OLD), reloadedFor: null, dialogOpen: false };
 
   test('nothing when the page is current or the read failed', () => {
     expect(panelUpdateAction({ ...stale, loaded: documentForm(SERVED), moment: 'load',
@@ -126,5 +149,128 @@ describe('panelUpdateAction', () => {
     const later = new Date(Date.parse(SERVED) + 86_400_000).toUTCString();
     expect(panelUpdateAction({ ...stale, served: later, reloadedFor: SERVED, moment: 'load',
       hash: '#/quota' })).toBe('reload');
+  });
+
+  test('an open dialog is offered, not reloaded: a reset claim may be in flight', () => {
+    for (const moment of ['load', 'return', 'hidden'] as const) {
+      expect(panelUpdateAction({ ...stale, dialogOpen: true, moment,
+        hash: '#/quota' })).toBe('offer');
+    }
+  });
+});
+
+/** A browser for the checker: records what it did, answers reads when told to. */
+function fakeEnv(overrides: Partial<PanelUpdateEnv> & { storage?: 'ok' | 'broken' } = {}) {
+  const { storage = 'ok', ...rest } = overrides;
+  const did = { reloads: 0, offers: 0, reads: 0, stored: null as string | null };
+  const reads: Array<(served: string | null) => void> = [];
+  const env: PanelUpdateEnv = {
+    readServed: () => {
+      did.reads += 1;
+      return new Promise((resolve) => reads.push(resolve));
+    },
+    loaded: () => documentForm(OLD),
+    hash: () => '#/quota',
+    dialogOpen: () => false,
+    reloadedFor: () => (storage === 'ok' ? did.stored : null),
+    recordReload: (served) => {
+      if (storage === 'broken') return false;
+      did.stored = served;
+      return true;
+    },
+    reload: () => {
+      did.reloads += 1;
+    },
+    offer: () => {
+      did.offers += 1;
+    },
+    ...rest,
+  };
+  const answer = async (served: string | null) => {
+    const resolve = reads.shift();
+    if (!resolve) throw new Error('no read in flight');
+    resolve(served);
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  return { env, did, answer };
+}
+
+describe('createPanelUpdateChecker', () => {
+  test('a stale page reloads once as it loads, and records what it reloaded for', async () => {
+    const { env, did, answer } = fakeEnv();
+    const checker = createPanelUpdateChecker(env);
+    const done = checker.check('load');
+    await answer(SERVED);
+    await done;
+    expect(did).toMatchObject({ reloads: 1, offers: 0, stored: SERVED });
+  });
+
+  test('the reload came back with the same old page: offered, not reloaded again', async () => {
+    const { env, did, answer } = fakeEnv();
+    env.recordReload(SERVED);
+    const checker = createPanelUpdateChecker(env);
+    const done = checker.check('load');
+    await answer(SERVED);
+    await done;
+    expect(did).toMatchObject({ reloads: 0, offers: 1 });
+  });
+
+  test('without sessionStorage it never reloads on its own: nothing would stop a loop', async () => {
+    const { env, did, answer } = fakeEnv({ storage: 'broken' });
+    const checker = createPanelUpdateChecker(env);
+    for (const moment of ['load', 'return'] as const) {
+      const done = checker.check(moment);
+      await answer(SERVED);
+      await done;
+    }
+    checker.hide();
+    expect(did).toMatchObject({ reloads: 0, offers: 3 });
+  });
+
+  test('StrictMode: a read that lands after unmount does nothing', async () => {
+    const { env, did, answer } = fakeEnv();
+    const first = createPanelUpdateChecker(env);
+    const firstDone = first.check('load');
+    first.dispose();
+    const second = createPanelUpdateChecker(env);
+    const secondDone = second.check('load');
+    await answer(SERVED);
+    await firstDone;
+    expect(did).toMatchObject({ reloads: 0, offers: 0 });
+    await answer(SERVED);
+    await secondDone;
+    expect(did).toMatchObject({ reloads: 1, offers: 0 });
+  });
+
+  test('offered while in use, then reloaded as the tab hides on a read-only page', async () => {
+    let hash = '#/config';
+    const { env, did, answer } = fakeEnv({ hash: () => hash });
+    const checker = createPanelUpdateChecker(env);
+    const done = checker.check('interval');
+    await answer(SERVED);
+    await done;
+    expect(did).toMatchObject({ reloads: 0, offers: 1 });
+    checker.hide(); // still on the config page
+    expect(did).toMatchObject({ reloads: 0, offers: 2, reads: 1 });
+    hash = '#/quota';
+    checker.hide();
+    expect(did).toMatchObject({ reloads: 1, reads: 1, stored: SERVED });
+  });
+
+  test('hiding before anything newer was found does nothing', () => {
+    const { env, did } = fakeEnv();
+    createPanelUpdateChecker(env).hide();
+    expect(did).toMatchObject({ reloads: 0, offers: 0, reads: 0 });
+  });
+
+  test('the banner button reloads, and the loop guard covers it', async () => {
+    const { env, did, answer } = fakeEnv({ hash: () => '#/config' });
+    const checker = createPanelUpdateChecker(env);
+    const done = checker.check('interval');
+    await answer(SERVED);
+    await done;
+    checker.reloadNow();
+    expect(did).toMatchObject({ reloads: 1, stored: SERVED });
   });
 });
