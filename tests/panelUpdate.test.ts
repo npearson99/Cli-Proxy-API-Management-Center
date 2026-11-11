@@ -113,7 +113,8 @@ describe('isReadOnlyRoute', () => {
 });
 
 describe('panelUpdateAction', () => {
-  const stale = { served: SERVED, loaded: documentForm(OLD), reloadedFor: null, dialogOpen: false };
+  const stale = { served: SERVED, loaded: documentForm(OLD), reloadedFor: null, dialogOpen: false,
+    keepsLogin: true };
 
   test('nothing when the page is current or the read failed', () => {
     expect(panelUpdateAction({ ...stale, loaded: documentForm(SERVED), moment: 'load',
@@ -151,6 +152,16 @@ describe('panelUpdateAction', () => {
       hash: '#/quota' })).toBe('reload');
   });
 
+  test('a login without "remember" is offered, not reloaded: it would land on login', () => {
+    for (const moment of ['load', 'return', 'hidden'] as const) {
+      expect(panelUpdateAction({ ...stale, keepsLogin: false, moment,
+        hash: '#/quota' })).toBe('offer');
+    }
+    // On the login page itself there is nothing to lose.
+    expect(panelUpdateAction({ ...stale, keepsLogin: false, moment: 'load',
+      hash: '#/login' })).toBe('reload');
+  });
+
   test('an open dialog is offered, not reloaded: a reset claim may be in flight', () => {
     for (const moment of ['load', 'return', 'hidden'] as const) {
       expect(panelUpdateAction({ ...stale, dialogOpen: true, moment,
@@ -172,6 +183,7 @@ function fakeEnv(overrides: Partial<PanelUpdateEnv> & { storage?: 'ok' | 'broken
     loaded: () => documentForm(OLD),
     hash: () => '#/quota',
     dialogOpen: () => false,
+    keepsLogin: () => true,
     reloadedFor: () => (storage === 'ok' ? did.stored : null),
     recordReload: (served) => {
       if (storage === 'broken') return false;

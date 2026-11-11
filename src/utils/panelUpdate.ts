@@ -67,9 +67,12 @@ export async function readServedLastModified(
 // Pages that show state and edit none: reloading one loses nothing.
 const READ_ONLY_ROUTES = new Set(['/', '/dashboard', '/quota', '/logs']);
 
+function routePath(hash: string): string {
+  return hash.replace(/^#/, '').split('?')[0] || '/';
+}
+
 export function isReadOnlyRoute(hash: string): boolean {
-  const path = hash.replace(/^#/, '').split('?')[0] || '/';
-  return READ_ONLY_ROUTES.has(path);
+  return READ_ONLY_ROUTES.has(routePath(hash));
 }
 
 /**
@@ -85,8 +88,10 @@ export type PanelUpdateAction = 'none' | 'reload' | 'offer';
  * or on a read-only page while the tab comes back or goes out of view. Anywhere else,
  * offer it: a reload mid-edit would lose the edit. An open dialog is offered too: on a
  * read-only page it is a confirmation, or a reset or clear still in flight, which a
- * reload would cut off with its outcome unknown. A reload that came back with the same
- * old page is not tried again, or a cache that will not let go would loop.
+ * reload would cut off with its outcome unknown. So is a login that does not survive a
+ * reload (signed in without "remember"): the reload would land on the login page. A
+ * reload that came back with the same old page is not tried again, or a cache that will
+ * not let go would loop.
  */
 export function panelUpdateAction(args: {
   served: string | null | undefined;
@@ -95,11 +100,13 @@ export function panelUpdateAction(args: {
   hash: string;
   reloadedFor: string | null;
   dialogOpen: boolean;
+  keepsLogin: boolean;
 }): PanelUpdateAction {
-  const { served, loaded, moment, hash, reloadedFor, dialogOpen } = args;
+  const { served, loaded, moment, hash, reloadedFor, dialogOpen, keepsLogin } = args;
   if (!isNewerPanel(served, loaded)) return 'none';
   if (reloadedFor && reloadedFor === served) return 'offer';
   if (dialogOpen) return 'offer';
+  if (!keepsLogin && routePath(hash) !== '/login') return 'offer';
   if (moment === 'load') return 'reload';
   if ((moment === 'return' || moment === 'hidden') && isReadOnlyRoute(hash)) return 'reload';
   return 'offer';
@@ -113,6 +120,8 @@ export interface PanelUpdateEnv {
   /** window.location.hash */
   hash(): string;
   dialogOpen(): boolean;
+  /** The login survives a reload: signed in with "remember". */
+  keepsLogin(): boolean;
   /** The served version this tab last reloaded for. */
   reloadedFor(): string | null;
   /** Records the version a reload is for; false when it could not be recorded. */
@@ -145,6 +154,7 @@ export function createPanelUpdateChecker(env: PanelUpdateEnv): PanelUpdateChecke
       hash: env.hash(),
       reloadedFor: env.reloadedFor(),
       dialogOpen: env.dialogOpen(),
+      keepsLogin: env.keepsLogin(),
     });
     if (action === 'none' || !served) return;
     // A reload this tab cannot record is not tried: on a cache that will not let go it

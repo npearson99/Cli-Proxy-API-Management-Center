@@ -15,6 +15,16 @@ function reloadedFor(): string | null {
   }
 }
 
+// useAuthStore keeps this only for a login made with "remember"; without it a reload
+// lands on the login page.
+function keepsLogin(): boolean {
+  try {
+    return window.localStorage.getItem('isLoggedIn') === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function recordReload(served: string): boolean {
   try {
     window.sessionStorage.setItem(PANEL_RELOADED_FOR_KEY, served);
@@ -40,6 +50,7 @@ export function usePanelUpdateCheck() {
       loaded: () => document.lastModified,
       hash: () => window.location.hash,
       dialogOpen: () => document.querySelector('[aria-modal="true"]') !== null,
+      keepsLogin,
       reloadedFor,
       recordReload,
       reload: () => window.location.reload(),
