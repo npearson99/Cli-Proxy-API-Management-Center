@@ -1473,6 +1473,10 @@
     "copy_failed": "Copy failed",
     "link_copied": "Link copied to clipboard"
   },
+  "panel_update": {
+    "available": "A newer panel is installed.",
+    "reload": "Reload"
+  },
   "language": {
     "switch": "Language",
     "chinese": "中文",

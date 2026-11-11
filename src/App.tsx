@@ -3,6 +3,7 @@ import { Outlet, RouterProvider, createHashRouter } from 'react-router-dom';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotificationContainer } from '@/components/common/NotificationContainer';
 import { ConfirmationModal } from '@/components/common/ConfirmationModal';
+import { PanelUpdateBanner } from '@/components/common/PanelUpdateBanner';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { ProtectedRoute } from '@/router/ProtectedRoute';
 import { useLanguageStore, useThemeStore } from '@/stores';
@@ -12,6 +13,7 @@ function RootShell() {
     <>
       <NotificationContainer />
       <ConfirmationModal />
+      <PanelUpdateBanner />
       <Outlet />
     </>
   );

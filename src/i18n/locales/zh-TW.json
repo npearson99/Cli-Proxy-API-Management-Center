@@ -1494,6 +1494,10 @@
     "copy_failed": "複製失敗",
     "link_copied": "已複製"
   },
+  "panel_update": {
+    "available": "已安裝更新版本的面板。",
+    "reload": "重新載入"
+  },
   "language": {
     "switch": "語言",
     "chinese": "簡體中文",
