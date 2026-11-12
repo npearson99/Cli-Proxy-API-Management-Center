@@ -465,6 +465,7 @@
     "reset_kind_full": "full reset",
     "reset_usable": "Usable now",
     "reset_usable_gives_back": "Usable now · gives back {{share}} of the weekly limit",
+    "reset_held_disabled": "Held while the seat is disabled",
     "reset_share_unknown": "an unknown share",
     "reset_paused": "paused",
     "reset_none_left": "none left",

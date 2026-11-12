@@ -29,12 +29,17 @@ import type { QuotaBodyProps, QuotaClassMap } from '../../types';
 const capitalize = (text: string, locale?: string) =>
   text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
 
-/** Resets the seat still holds, and how many of those it could spend right now. */
-const countResets = (resets: ClaudeResetInfo) => ({
+/**
+ * Resets the seat still holds, and how many of those it could spend right now: none on
+ * a disabled seat, where the page offers no reset.
+ */
+const countClaudeResets = (resets: ClaudeResetInfo, disabled = false) => ({
   left: resets.grants.reduce((sum, grant) => sum + grant.resetsLeft, 0),
-  usable: resets.grants
-    .filter((grant) => isClaimableClaudeGrant(grant, resets))
-    .reduce((sum, grant) => sum + grant.resetsLeft, 0),
+  usable: disabled
+    ? 0
+    : resets.grants
+        .filter((grant) => isClaimableClaudeGrant(grant, resets))
+        .reduce((sum, grant) => sum + grant.resetsLeft, 0),
 });
 
 /**
@@ -45,10 +50,12 @@ function ClaudeResetGrants({
   resets,
   soonestRowId,
   classes,
+  disabled,
 }: {
   resets: ClaudeResetInfo;
   soonestRowId: string | null;
   classes: QuotaClassMap;
+  disabled: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const now = useNow();
@@ -85,10 +92,14 @@ function ClaudeResetGrants({
           now,
           locale
         );
-        const claimable = isClaimableClaudeGrant(grant, resets);
+        const usableNow = isClaimableClaudeGrant(grant, resets);
+        // A disabled seat holds its grants but the page will not spend one there.
+        const claimable = usableNow && !disabled;
         const weeklyBack = claudeGrantWeeklyGiveBack(grant, resets);
         let status: string;
-        if (claimable) {
+        if (usableNow && disabled) {
+          status = t('claude_quota.reset_held_disabled');
+        } else if (claimable) {
           // A claimable grant at 0% weekly gives back another window it clears (the
           // 5-hour one), or one with no reading: "gives back 0%" would read as nothing.
           status = grant.givesBackWeekly
@@ -145,7 +156,11 @@ function ClaudeResetGrants({
   );
 }
 
-export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaState>) {
+export function ClaudeQuotaBody({
+  quota,
+  classes,
+  disabled = false,
+}: QuotaBodyProps<ClaudeQuotaState>) {
   const { t, i18n } = useTranslation();
   const now = useNow();
   const soonestRowId = useMemo(
@@ -158,7 +173,7 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
   const resets = quota.resets;
   const resetCount =
     resets && !resets.error && resets.eligible && resets.grants.length > 0
-      ? countResets(resets)
+      ? countClaudeResets(resets, disabled)
       : null;
 
   return (
@@ -198,7 +213,12 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
         </div>
       )}
       {resets && (
-        <ClaudeResetGrants resets={resets} soonestRowId={soonestRowId} classes={classes} />
+        <ClaudeResetGrants
+          resets={resets}
+          soonestRowId={soonestRowId}
+          classes={classes}
+          disabled={disabled}
+        />
       )}
       {windows.length === 0 ? (
         <div className={classes.quotaMessage}>{t('claude_quota.empty_windows')}</div>

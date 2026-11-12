@@ -108,4 +108,6 @@ export function bindQuotaClasses(module: Record<string, string>, source: string)
 export interface QuotaBodyProps<TState> {
   quota: TState;
   classes: QuotaClassMap;
+  /** The credential is disabled in CPA: nothing it holds can be spent until it is enabled. */
+  disabled?: boolean;
 }

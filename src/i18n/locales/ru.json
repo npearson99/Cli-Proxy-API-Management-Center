@@ -458,6 +458,7 @@
     "reset_kind_full": "полный сброс",
     "reset_usable": "Можно использовать сейчас",
     "reset_usable_gives_back": "Можно использовать сейчас · вернёт {{share}} недельного лимита",
+    "reset_held_disabled": "Удерживается, пока аккаунт отключён",
     "reset_share_unknown": "неизвестную долю",
     "reset_paused": "приостановлен",
     "reset_none_left": "не осталось",

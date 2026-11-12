@@ -237,6 +237,25 @@ describe('ClaudeQuotaBody', () => {
     expect(markup).toContain('2 usable now');
   });
 
+  test('a disabled seat holds its grants and never calls one usable', () => {
+    const quota = withGrants([
+      grant({ resets_left: 2 }),
+      grant({ id: 'weekly-b', usable_now: false, unavailable_reason: 'cooldown' }),
+    ]);
+    const enabled = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));
+    const markup = renderToStaticMarkup(
+      createElement(ClaudeQuotaBody, { quota, classes, disabled: true })
+    );
+
+    expect(enabled).toContain('Usable now');
+    expect(enabled).toContain('claudeResetGrantStatusUsable');
+    // Still banked: the count of what is left stays.
+    expect(markup).toContain('<span class="codexPlanValue">3</span>');
+    expect(markup).not.toMatch(/usable now/i);
+    expect(markup).not.toContain('claudeResetGrantStatusUsable');
+    expect(markup).toContain('Held while the seat is disabled');
+  });
+
   test('shows no count for a seat the reset program does not serve', () => {
     const quota = withGrants([grant()], { eligible: false, ineligible_reason: 'surface' });
     const markup = renderToStaticMarkup(createElement(ClaudeQuotaBody, { quota, classes }));

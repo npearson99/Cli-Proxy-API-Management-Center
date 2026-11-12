@@ -465,6 +465,7 @@
     "reset_kind_full": "完整重置",
     "reset_usable": "現在可用",
     "reset_usable_gives_back": "現在可用 · 可退回週限額的 {{share}}",
+    "reset_held_disabled": "席位停用期間保留",
     "reset_share_unknown": "未知比例",
     "reset_paused": "已暫停",
     "reset_none_left": "已用完",
