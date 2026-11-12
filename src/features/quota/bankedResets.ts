@@ -7,11 +7,14 @@
  * November 2026 full limit reset is `full` on a seat with a 5-hour window and `weekly`
  * on the rest), and every Fable reset is one entry, since they return the same thing.
  *
+ * A disabled seat's grants are listed (they are still banked), but none is usable: the
+ * page will not spend a reset on a seat CPA routes nothing to.
+ *
  * React-free — tests/bankedResets.test.ts consumes it directly.
  */
 
 import type { ClaudeResetInfo } from '@/types';
-import { isClaimableClaudeGrant, parseIsoToMs } from '@/utils/quota';
+import { isClaimableClaudeGrant, isDisabledAuthFile, parseIsoToMs } from '@/utils/quota';
 import type { QuotaProviderType } from './providers/types';
 
 /**
@@ -30,7 +33,7 @@ export interface BankedResetGroup {
   left: number;
   /** Seats holding at least one. */
   seats: number;
-  /** Resets this page would spend now (usable, and giving something back). */
+  /** Resets this page would spend now (usable, giving something back, on an enabled seat). */
   usable: number;
   /** The soonest use-by date among them. */
   endsAtMs: number | null;
@@ -46,11 +49,11 @@ export interface BankedResetSummary {
   total: number;
 }
 
-type Entry = { file: { name: string }; type: QuotaProviderType };
+type Entry = { file: { name: string; disabled?: unknown }; type: QuotaProviderType };
 
-export function summarizeBankedResets(
-  entries: readonly Entry[],
-  quotaFor: (entry: Entry) => unknown
+export function summarizeBankedResets<E extends Entry>(
+  entries: readonly E[],
+  quotaFor: (entry: E) => unknown
 ): BankedResetSummary {
   const groups = new Map<string, BankedResetGroup & { holders: Set<string> }>();
   let read = 0;
@@ -63,6 +66,7 @@ export function summarizeBankedResets(
     // An ineligible seat was read and holds nothing; it is not one still to be counted.
     read += 1;
     if (!info.eligible) continue;
+    const disabled = isDisabledAuthFile(entry.file);
     for (const grant of info.grants) {
       if (grant.resetsLeft <= 0) continue;
       const key = grant.givesBackWeekly ? BANKED_FABLE_KEY : grant.id;
@@ -78,7 +82,7 @@ export function summarizeBankedResets(
       };
       group.left += grant.resetsLeft;
       group.holders.add(entry.file.name);
-      if (isClaimableClaudeGrant(grant, info)) group.usable += grant.resetsLeft;
+      if (!disabled && isClaimableClaudeGrant(grant, info)) group.usable += grant.resetsLeft;
       const endsAtMs = parseIsoToMs(grant.endsAt);
       if (endsAtMs !== null && (group.endsAtMs === null || endsAtMs < group.endsAtMs)) {
         group.endsAtMs = endsAtMs;

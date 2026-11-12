@@ -91,7 +91,11 @@ export function WeeklyCapacity({ summary, resolvedTheme }: WeeklyCapacityProps) 
 
               <div className={styles.body}>
                 <span className={styles.label}>{label}</span>
-                {row.measured === 0 ? (
+                {row.total === 0 ? (
+                  <span className={`${styles.value} ${styles.toneUnknown}`}>
+                    {t('quota_management.capacity_none_enabled')}
+                  </span>
+                ) : row.measured === 0 ? (
                   <span className={`${styles.value} ${styles.toneUnknown}`}>
                     {t('quota_management.capacity_none_measured')}
                   </span>
@@ -110,6 +114,11 @@ export function WeeklyCapacity({ summary, resolvedTheme }: WeeklyCapacityProps) 
                 {unmeasured > 0 && row.measured > 0 && (
                   <span className={styles.note}>
                     {t('quota_management.capacity_unmeasured', { count: unmeasured })}
+                  </span>
+                )}
+                {row.disabled > 0 && (
+                  <span className={styles.note}>
+                    {t('quota_management.capacity_disabled', { count: row.disabled })}
                   </span>
                 )}
               </div>

@@ -9,7 +9,9 @@
  *   已填充的卡用 supplementQuota 只补表头给不出的数据（Claude 储备重置），两者绝不重复发；
  * - cacheGeneration 会话隔离 + request-id 去重（见 useQuotaBatchLoader）；
  * - 文件列表变化后按 provider 剪枝额度缓存（已删文件不残留）；
- * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表。
+ * - useHeaderRefresh 单槽位：本页唯一注册者，全局刷新 = 重取文件列表；
+ * - 停用的凭证照样出卡（标 Disabled、排在启用卡之后），可刷新、不可重置，
+ *   不计入 7 天余量与可用的储备重置。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -48,7 +50,9 @@ import {
 import {
   buildTabCounts,
   classifyQuotaFiles,
+  countDisabledEntries,
   filterEntriesByTab,
+  isDisabledQuotaEntry,
   paginate,
   sortQuotaEntries,
   type QuotaFileEntry,
@@ -150,6 +154,7 @@ export function QuotaPage() {
 
   const entries = useMemo(() => classifyQuotaFiles(files), [files]);
   const tabCounts = useMemo(() => buildTabCounts(entries), [entries]);
+  const disabledCount = useMemo(() => countDisabledEntries(entries), [entries]);
   const filteredEntries = useMemo(() => filterEntriesByTab(entries, tab), [entries, tab]);
 
   const recoveryMsFor = QUOTA_SORT_KEY_RESOLVERS[sortMode];
@@ -341,6 +346,7 @@ export function QuotaPage() {
         totalCount={entries.length}
         loadedCount={loadedCount}
         attentionCount={attentionCount}
+        disabledCount={disabledCount}
         refreshing={loading || batchLoading}
         disableControls={disableControls}
         onRefreshAll={handleRefreshAll}
@@ -411,7 +417,8 @@ export function QuotaPage() {
                 entry={entry}
                 quota={getQuota(entry)}
                 resolvedTheme={resolvedTheme}
-                canRefresh={canUseActions && !entry.file.disabled}
+                disabled={isDisabledQuotaEntry(entry)}
+                canRefresh={canUseActions}
                 resetting={resettingQuotaName === entry.file.name}
                 entranceDelayMs={cardEntranceDelay(index)}
                 onRefresh={() => void refreshQuota(entry.file, QUOTA_ADAPTERS[entry.type])}

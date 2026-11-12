@@ -12,6 +12,11 @@
  * proxy started) gets `primeQuota` instead, where the provider has one: a single read
  * that paints the whole card.
  *
+ * A disabled seat gets its read too. CPA keeps refreshing a disabled credential's token,
+ * and `api-call` sends the stored token whatever the flag says, so the read costs the
+ * one request it costs any seat (a disabled Codex seat's usage read reached chatgpt.com
+ * on 2026-11-12; CPA v8.0.53's APICall has no disabled check).
+ *
  * Either is the card's one free read for the cache generation, so the two share a key.
  * Which one goes is decided when the queue lets the read go, not when it was asked
  * for: a seed that painted the card while it waited turns its prime into the
@@ -71,7 +76,7 @@ export function pendingFreeReads(
   asked: ReadonlySet<string>
 ): QuotaFileEntry[] {
   return entries.filter((entry) => {
-    if (entry.type !== adapter.type || entry.file.disabled) return false;
+    if (entry.type !== adapter.type) return false;
     if (asked.has(freeReadKey(entry))) return false;
     return (
       wantsPrime(adapter, current[entry.file.name]) ||

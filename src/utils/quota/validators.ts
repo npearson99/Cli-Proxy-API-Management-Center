@@ -31,8 +31,9 @@ export function isXaiFile(file: AuthFileItem): boolean {
   return resolveAuthProvider(file) === 'xai';
 }
 
-export function isDisabledAuthFile(file: AuthFileItem): boolean {
-  const raw = (file as { disabled?: unknown }).disabled;
+/** Disabled in CPA: it serves nothing. The listing may send the flag as a bool, 0/1 or a string. */
+export function isDisabledAuthFile(file: { disabled?: unknown }): boolean {
+  const raw = file.disabled;
   if (typeof raw === 'boolean') return raw;
   if (typeof raw === 'number') return raw !== 0;
   if (typeof raw === 'string') return raw.trim().toLowerCase() === 'true';

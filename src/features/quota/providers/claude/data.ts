@@ -49,7 +49,6 @@ import {
   resolveResetMs,
   createStatusError,
   isClaudeFile,
-  isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { resetOutcomeUnknownError } from '../../resetCopy';
@@ -633,7 +632,7 @@ export const CLAUDE_CONFIG: QuotaProviderData<
 > = {
   type: 'claude',
   i18nPrefix: 'claude_quota',
-  filterFn: (file) => isClaudeFile(file) && !isDisabledAuthFile(file),
+  filterFn: isClaudeFile,
   fetchQuota: fetchClaudeQuota,
   primeQuota: primeClaudeQuota,
   resetQuota: resetClaudeQuota,

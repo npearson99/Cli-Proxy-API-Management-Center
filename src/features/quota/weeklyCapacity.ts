@@ -23,6 +23,10 @@
  *   served has none and stays `idle` until someone fetches it. Unmeasured
  *   credentials are reported as a separate count instead of being treated as
  *   full (which would invent capacity) or empty (which would invent scarcity).
+ *
+ * A disabled credential is left out of every figure here, measured or not: CPA routes
+ * nothing to it, so its headroom is not capacity the fleet can spend. It is counted
+ * apart (`disabled`) so the strip can say why the total is smaller than the grid.
  */
 
 import {
@@ -30,6 +34,7 @@ import {
   CLAUDE_FABLE_WINDOW_ID,
   CODEX_ACCOUNT_WIDE_WINDOW_ID,
   WEEKLY_PERIOD_HOURS,
+  isDisabledAuthFile,
   normalizeNumberValue,
 } from '@/utils/quota';
 import { QUOTA_TAB_ORDER } from './constants';
@@ -234,8 +239,10 @@ export interface WeeklyCapacityRow {
   accountsFree: number;
   /** Credentials whose weekly headroom could be read. */
   measured: number;
-  /** Credentials of this provider in the current filter. */
+  /** Enabled credentials of this provider in the current filter. */
   total: number;
+  /** Disabled credentials of this provider in the current filter; in no figure above. */
+  disabled: number;
   /**
    * Per-model figures, in MODEL_SCOPED_WEEKLY_ROWS order. A model no fetched
    * credential publishes a row for is omitted: its figure would only repeat the
@@ -256,11 +263,15 @@ export interface WeeklyCapacitySummary {
  * The caller passes the *filtered* entries, so the summary follows the page's
  * provider tab without knowing that tabs exist. Providers with no credentials
  * in scope are dropped rather than shown as a zero, which would read as "no
- * capacity left" for a provider you simply do not use.
+ * capacity left" for a provider you simply do not use. A provider whose credentials
+ * are all disabled keeps its row, with a total of zero: it is in use, and has
+ * nothing that can serve.
  */
-export function summarizeWeeklyCapacity(
-  entries: readonly { file: { name: string }; type: QuotaProviderType }[],
-  quotaFor: (entry: { file: { name: string }; type: QuotaProviderType }) => unknown
+type CapacityEntry = { file: { name: string; disabled?: unknown }; type: QuotaProviderType };
+
+export function summarizeWeeklyCapacity<E extends CapacityEntry>(
+  entries: readonly E[],
+  quotaFor: (entry: E) => unknown
 ): WeeklyCapacitySummary {
   const byProvider = new Map<QuotaProviderType, WeeklyCapacityRow>();
 
@@ -270,12 +281,18 @@ export function summarizeWeeklyCapacity(
       accountsFree: 0,
       measured: 0,
       total: 0,
+      disabled: 0,
       scoped: (MODEL_SCOPED_WEEKLY_ROWS[entry.type] ?? []).map((spec) => ({
         ...spec,
         accountsFree: 0,
         ownRows: 0,
       })),
     };
+    byProvider.set(entry.type, row);
+    if (isDisabledAuthFile(entry.file)) {
+      row.disabled += 1;
+      continue;
+    }
     row.total += 1;
     const quota = quotaFor(entry);
     const headroom = weeklyHeadroom(entry.type, quota);
@@ -290,7 +307,6 @@ export function summarizeWeeklyCapacity(
         if (reading.ownRow) scope.ownRows += 1;
       }
     }
-    byProvider.set(entry.type, row);
   }
 
   // QUOTA_TAB_ORDER, not insertion order: the strip sits directly under the

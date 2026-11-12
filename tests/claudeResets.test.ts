@@ -955,13 +955,17 @@ describe('priming a card nothing has painted', () => {
       entry('empty.json'),
       entry('disabled.json', true),
     ];
+    // A disabled seat is primed like any other: the read costs the same one request.
     expect(
       pendingFreeReads(entries, current, adapter, new Set()).map((item) => item.file.name)
-    ).toEqual(['idle.json', 'empty.json']);
+    ).toEqual(['idle.json', 'empty.json', 'disabled.json']);
     expect(
-      pendingFreeReads(entries, current, adapter, new Set([freeReadKey(entry('empty.json'))])).map(
-        (item) => item.file.name
-      )
+      pendingFreeReads(
+        entries,
+        current,
+        adapter,
+        new Set([freeReadKey(entry('empty.json')), freeReadKey(entry('disabled.json'))])
+      ).map((item) => item.file.name)
     ).toEqual(['idle.json']);
   });
 

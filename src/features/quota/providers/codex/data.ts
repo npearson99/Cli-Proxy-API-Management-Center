@@ -35,7 +35,6 @@ import {
   formatCodexResetLabel,
   createStatusError,
   isCodexFile,
-  isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import type { QuotaProviderData } from '../types';
@@ -461,7 +460,7 @@ const resetCodexQuota = async (file: AuthFileItem, t: TFunction): Promise<CodexQ
 export const CODEX_CONFIG: QuotaProviderData<CodexQuotaState, CodexQuotaData> = {
   type: 'codex',
   i18nPrefix: 'codex_quota',
-  filterFn: (file) => isCodexFile(file) && !isDisabledAuthFile(file),
+  filterFn: isCodexFile,
   fetchQuota: fetchCodexQuota,
   resetQuota: resetCodexQuota,
   canResetQuota: (quota) => (quota.rateLimitResetCreditsAvailableCount ?? 0) > 0,

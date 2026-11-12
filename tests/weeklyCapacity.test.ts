@@ -425,4 +425,54 @@ describe('summarizeWeeklyCapacity', () => {
     expect(summary.rows).toEqual([]);
     expect(summary.partial).toBe(false);
   });
+  describe('disabled credentials', () => {
+    const off = (type: QuotaProviderType, name: string) => ({
+      file: { name, disabled: true },
+      type,
+    });
+    const offQuotas: Record<string, unknown> = {
+      ...quotas,
+      // Full headroom on both rows: counting it would invent a whole account.
+      x: claude([
+        { id: 'seven-day', usedPercent: 0, periodHours: WEEK },
+        { id: 'seven-day-fable', usedPercent: 0, periodHours: WEEK },
+      ]),
+      y: codex([{ id: 'weekly', usedPercent: 0, periodHours: WEEK }]),
+      z: claude([], 'idle'),
+    };
+    const summarizeWith = (entries: { file: { name: string }; type: QuotaProviderType }[]) =>
+      summarizeWeeklyCapacity(entries, (item) => offQuotas[item.file.name]);
+
+    test('add nothing to any figure, Fable included, and are counted apart', () => {
+      const withFable = [
+        entry('claude', 'a'),
+        off('claude', 'x'),
+        entry('codex', 'd'),
+        off('codex', 'y'),
+      ];
+      const without = [entry('claude', 'a'), entry('codex', 'd')];
+      const on = summarizeWith(withFable);
+      const base = summarizeWith(without);
+      const claudeOn = rowFor(on.rows, 'claude');
+      const claudeBase = rowFor(base.rows, 'claude');
+      expect(claudeOn?.accountsFree).toBe(claudeBase?.accountsFree as number);
+      expect(claudeOn?.measured).toBe(1);
+      expect(claudeOn?.total).toBe(1);
+      expect(claudeOn?.disabled).toBe(1);
+      // The disabled seat is the only one with a Fable row, so no Fable figure forms.
+      expect(claudeOn?.scoped).toEqual([]);
+      expect(rowFor(on.rows, 'codex')?.accountsFree).toBeCloseTo(0.5, 10);
+      expect(rowFor(on.rows, 'codex')?.disabled).toBe(1);
+      expect(rowFor(base.rows, 'codex')?.disabled).toBe(0);
+    });
+
+    test('an unloaded disabled seat does not make the strip partial', () => {
+      expect(summarizeWith([entry('claude', 'a'), off('claude', 'z')]).partial).toBe(false);
+    });
+
+    test('a provider with only disabled seats keeps its row, with nothing that can serve', () => {
+      const row = rowFor(summarizeWith([off('codex', 'y')]).rows, 'codex');
+      expect(row).toMatchObject({ accountsFree: 0, measured: 0, total: 0, disabled: 1 });
+    });
+  });
 });

@@ -1,5 +1,7 @@
 /**
  * 单卡额度操作：刷新 + 重置（Codex 重置积分、Claude 储备重置）。
+ * A disabled credential may be refreshed (a read; CPA serves it) but never reset: a
+ * reset spent on a seat CPA routes nothing to buys nothing.
  * 流程 1:1 移植旧 QuotaSection（confirm modal、resetting 再入守卫、
  * generation-guarded commit、成功/失败通知），仅把 config 换成 adapter。
  */
@@ -12,7 +14,7 @@ import {
   useNotificationStore,
 } from '@/stores';
 import type { AuthFileItem } from '@/types';
-import { getStatusFromError } from '@/utils/quota';
+import { getStatusFromError, isDisabledAuthFile } from '@/utils/quota';
 import { quotaFetchQueueFor } from '../fetchQueue';
 import {
   buildResetConfirmation,
@@ -34,7 +36,7 @@ export function useQuotaActions(disableControls: boolean) {
 
   const refreshQuota = useCallback(
     async (file: AuthFileItem, adapter: QuotaAdapter) => {
-      if (disableControls || file.disabled) return;
+      if (disableControls) return;
       if (resettingQuotaName === file.name) return;
       if (getQuotaState(adapter, file.name)?.status === 'loading') return;
       const cacheGeneration = captureQuotaCacheGeneration();
@@ -76,7 +78,8 @@ export function useQuotaActions(disableControls: boolean) {
     (file: AuthFileItem, adapter: QuotaAdapter) => {
       const resetQuotaFn = adapter.resetQuota;
       if (!resetQuotaFn) return;
-      if (disableControls || file.disabled) return;
+      // The button is not offered on a disabled card (offersQuotaReset); this holds the line.
+      if (disableControls || isDisabledAuthFile(file)) return;
       if (getQuotaState(adapter, file.name)?.status === 'loading') return;
       if (resettingQuotaName === file.name) return;
       const confirmation = buildResetConfirmation(

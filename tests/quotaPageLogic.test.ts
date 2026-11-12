@@ -3,13 +3,17 @@ import { QUOTA_PAGE_SIZE } from '@/features/quota/constants';
 import {
   buildTabCounts,
   classifyQuotaFiles,
+  countDisabledEntries,
   filterEntriesByTab,
+  isDisabledQuotaEntry,
   isQuotaRefreshDisabled,
+  offersQuotaReset,
   paginate,
   resolveQuotaProviderType,
   sortQuotaEntries,
   type QuotaFileEntry,
 } from '@/features/quota/logic';
+import { QUOTA_ADAPTERS, type QuotaCardState } from '@/features/quota/providers';
 import type { AuthFileItem } from '@/types';
 
 const file = (name: string, provider: string, extra: Partial<AuthFileItem> = {}): AuthFileItem =>
@@ -26,38 +30,65 @@ const FILES: AuthFileItem[] = [
 ];
 
 describe('resolveQuotaProviderType', () => {
-  test('maps provider aliases and rejects unsupported or disabled files', () => {
+  test('maps provider aliases, rejects unsupported files and keeps disabled ones', () => {
     expect(resolveQuotaProviderType(file('a', 'grok'))).toBe('xai');
     expect(resolveQuotaProviderType(file('a', 'antigravity'))).toBe('antigravity');
     expect(resolveQuotaProviderType(file('a', 'gemini'))).toBeNull();
-    expect(resolveQuotaProviderType(file('a', 'claude', { disabled: true }))).toBeNull();
+    // A parked or switched-off seat must still get its card.
+    expect(resolveQuotaProviderType(file('a', 'claude', { disabled: true }))).toBe('claude');
+    expect(resolveQuotaProviderType(file('a', 'codex', { disabled: true }))).toBe('codex');
   });
 });
 
 describe('classifyQuotaFiles', () => {
-  test('drops unsupported and disabled files', () => {
+  test('drops unsupported files and keeps disabled ones', () => {
     const entries = classifyQuotaFiles(FILES);
     expect(entries.map((entry) => entry.file.name)).not.toContain('gemini-a.json');
-    expect(entries.map((entry) => entry.file.name)).not.toContain('claude-off.json');
-    expect(entries).toHaveLength(5);
+    expect(entries.map((entry) => entry.file.name)).toContain('claude-off.json');
+    expect(entries).toHaveLength(6);
   });
 
   test('orders entries by provider tab order', () => {
     const entries = classifyQuotaFiles(FILES);
-    expect(entries.map((entry) => entry.type)).toEqual(['claude', 'codex', 'codex', 'xai', 'kimi']);
+    expect(entries.map((entry) => entry.type)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'codex',
+      'xai',
+      'kimi',
+    ]);
+  });
+});
+
+describe('isDisabledQuotaEntry', () => {
+  test('reads the disabled flag in every shape the listing sends it', () => {
+    const entry = (disabled: unknown) =>
+      ({ file: { name: 'x', disabled }, type: 'codex' }) as unknown as QuotaFileEntry;
+    expect(isDisabledQuotaEntry(entry(true))).toBe(true);
+    expect(isDisabledQuotaEntry(entry('true'))).toBe(true);
+    expect(isDisabledQuotaEntry(entry(1))).toBe(true);
+    expect(isDisabledQuotaEntry(entry(false))).toBe(false);
+    expect(isDisabledQuotaEntry(entry(undefined))).toBe(false);
+    expect(isDisabledQuotaEntry(entry('false'))).toBe(false);
   });
 });
 
 describe('buildTabCounts', () => {
-  test('counts per provider plus an all total, zero-filling empty tabs', () => {
+  test('counts every card a tab shows, disabled ones included, zero-filling empty tabs', () => {
     expect(buildTabCounts(classifyQuotaFiles(FILES))).toEqual({
-      all: 5,
-      claude: 1,
+      all: 6,
+      claude: 2,
       antigravity: 0,
       codex: 2,
       xai: 1,
       kimi: 1,
     });
+  });
+
+  test('countDisabledEntries counts the disabled cards among them', () => {
+    expect(countDisabledEntries(classifyQuotaFiles(FILES))).toBe(1);
+    expect(countDisabledEntries([])).toBe(0);
   });
 });
 
@@ -65,7 +96,14 @@ describe('filterEntriesByTab', () => {
   const entries = classifyQuotaFiles(FILES);
 
   test("passes everything through on the 'all' tab", () => {
-    expect(filterEntriesByTab(entries, 'all')).toHaveLength(5);
+    expect(filterEntriesByTab(entries, 'all')).toHaveLength(6);
+  });
+
+  test('keeps a disabled card in its provider tab', () => {
+    expect(filterEntriesByTab(entries, 'claude').map((entry) => entry.file.name)).toEqual([
+      'claude-a.json',
+      'claude-off.json',
+    ]);
   });
 
   test('filters to a single provider', () => {
@@ -81,6 +119,30 @@ describe('isQuotaRefreshDisabled', () => {
   test('blocks a single-card refresh while the same quota is resetting', () => {
     expect(isQuotaRefreshDisabled(true, false, true)).toBe(true);
     expect(isQuotaRefreshDisabled(true, false, false)).toBe(false);
+  });
+});
+
+describe('offersQuotaReset', () => {
+  const codex = QUOTA_ADAPTERS.codex;
+  const withCredit = {
+    status: 'success',
+    rateLimitResetCreditsAvailableCount: 1,
+  } as unknown as QuotaCardState;
+
+  test('a loaded card with a reset to spend offers it on an enabled credential', () => {
+    expect(offersQuotaReset(codex, withCredit, false)).toBe(true);
+  });
+
+  test('a disabled credential never offers a reset, whatever it holds', () => {
+    expect(offersQuotaReset(codex, withCredit, true)).toBe(false);
+  });
+
+  test('nothing to spend, nothing loaded, or no reset on the provider: no offer', () => {
+    const none = { status: 'success', rateLimitResetCreditsAvailableCount: 0 } as QuotaCardState;
+    expect(offersQuotaReset(codex, none, false)).toBe(false);
+    expect(offersQuotaReset(codex, { ...withCredit, status: 'loading' }, false)).toBe(false);
+    expect(offersQuotaReset(codex, undefined, false)).toBe(false);
+    expect(offersQuotaReset(QUOTA_ADAPTERS.kimi, withCredit, false)).toBe(false);
   });
 });
 
@@ -112,7 +174,8 @@ describe('paginate', () => {
 });
 
 describe('sortQuotaEntries', () => {
-  const entries = classifyQuotaFiles(FILES);
+  // The ordering rules among enabled cards; disabled ones have their own block below.
+  const entries = classifyQuotaFiles(FILES).filter((entry) => !isDisabledQuotaEntry(entry));
   const byName = (list: QuotaFileEntry[]) => list.map((entry) => entry.file.name);
 
   /** Recovery instants keyed by file name; anything absent resolves to null. */
@@ -193,5 +256,49 @@ describe('sortQuotaEntries', () => {
     const last = entries[entries.length - 1].file.name;
     const sorted = sortQuotaEntries(entries, 'soonest', resolver({ [last]: 1 }));
     expect(paginate(sorted, 1, 2).pageItems[0].file.name).toBe(last);
+  });
+});
+
+describe('sortQuotaEntries with disabled credentials', () => {
+  const entries = classifyQuotaFiles([
+    file('claude-off-b.json', 'claude', { disabled: true }),
+    file('claude-a.json', 'claude'),
+    file('codex-off.json', 'codex', { disabled: 'true' } as unknown as Partial<AuthFileItem>),
+    file('codex-a.json', 'codex'),
+    file('claude-off-a.json', 'claude', { disabled: true }),
+  ]);
+  const byName = (list: QuotaFileEntry[]) => list.map((entry) => entry.file.name);
+  const DISABLED_TAIL = ['claude-off-b.json', 'claude-off-a.json', 'codex-off.json'];
+
+  test('default mode puts every disabled card after the enabled ones, keeping their order', () => {
+    expect(byName(sortQuotaEntries(entries, 'default', () => null))).toEqual([
+      'claude-a.json',
+      'codex-a.json',
+      ...DISABLED_TAIL,
+    ]);
+  });
+
+  test('a disabled card that recovers first still sorts after every enabled card', () => {
+    for (const mode of ['soonest', 'weekly'] as const) {
+      const sorted = sortQuotaEntries(entries, mode, (entry) =>
+        entry.file.name.includes('-off') ? 1 : entry.file.name === 'codex-a.json' ? 100 : null
+      );
+      expect(byName(sorted)).toEqual(['codex-a.json', 'claude-a.json', ...DISABLED_TAIL]);
+    }
+  });
+
+  test('the disabled tail keeps the order the mode gives it', () => {
+    const sorted = sortQuotaEntries(entries, 'soonest', (entry) =>
+      entry.file.name === 'codex-off.json' ? 1 : entry.file.name === 'claude-off-a.json' ? 2 : 3
+    );
+    // Within the tail the mode's own rule holds: by instant, then incoming order.
+    expect(byName(sorted).slice(2)).toEqual([
+      'codex-off.json',
+      'claude-off-a.json',
+      'claude-off-b.json',
+    ]);
+    expect(byName(sortQuotaEntries(entries, 'soonest', () => null)).slice(2)).toEqual(
+      DISABLED_TAIL
+    );
   });
 });

@@ -27,7 +27,6 @@ import {
   createStatusError,
   getStatusFromError,
   isAntigravityFile,
-  isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import type { QuotaProviderData } from '../types';
@@ -202,7 +201,7 @@ const fetchAntigravityQuota = async (
 export const ANTIGRAVITY_CONFIG: QuotaProviderData<AntigravityQuotaState, AntigravityQuotaData> = {
   type: 'antigravity',
   i18nPrefix: 'antigravity_quota',
-  filterFn: (file) => isAntigravityFile(file) && !isDisabledAuthFile(file),
+  filterFn: isAntigravityFile,
   fetchQuota: fetchAntigravityQuota,
   storeSelector: (state) => state.antigravityQuota,
   storeSetter: 'setAntigravityQuota',

@@ -29,6 +29,42 @@
   }
 }
 
+/* 停用凭证：与凭证库停用卡同一配方（纸面更透、内容压暗），徽章另起不压暗 */
+.cardDisabled {
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  border-style: dashed;
+
+  .iconWrap,
+  .fileName,
+  .body {
+    opacity: 0.55;
+  }
+}
+
+.disabledBadge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: $font-mono;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.6;
+  padding: 2px 8px;
+  border-radius: $radius-full;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+}
+
+.disabledNote {
+  margin-right: auto;
+  align-self: center;
+  font-family: $font-mono;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* 首次数据到达时的一次性级联入场；切 tab / 翻页 / 刷新不重播 */
 .cardEnter {
   animation: quota-card-in 0.45s var(--ease-out-strong, ease-out) both;

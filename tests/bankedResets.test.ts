@@ -54,7 +54,7 @@ const seat = (
   ),
 });
 
-type Entry = { file: { name: string }; type: QuotaProviderType };
+type Entry = { file: { name: string; disabled?: boolean }; type: QuotaProviderType };
 const entry = (name: string, type: QuotaProviderType = 'claude'): Entry => ({
   file: { name },
   type,
@@ -146,5 +146,22 @@ describe("the fleet's banked Claude resets", () => {
     );
     // Only the failed and the unread seat are still to be counted.
     expect(summary).toEqual({ groups: [], read: 2, total: 4 });
+  });
+
+  test("a disabled seat's grants are still banked, but none is usable", () => {
+    const states: Record<string, unknown> = {
+      'on.json': seat([fullReset({ seven_day: 80 }), fableReset('launch-2610-fable')], 40),
+      'off.json': seat([fullReset({ seven_day: 90 }), fableReset('launch-2610-fable')], 60),
+    };
+    const summary = summarizeBankedResets(
+      [entry('on.json'), { file: { name: 'off.json', disabled: true }, type: 'claude' }],
+      (e) => states[e.file.name]
+    );
+    expect(summary.read).toBe(2);
+    expect(summary.total).toBe(2);
+    expect(summary.groups.map((g) => [g.key, g.left, g.seats, g.usable])).toEqual([
+      ['full-reset-2611', 2, 2, 1],
+      [BANKED_FABLE_KEY, 2, 2, 1],
+    ]);
   });
 });

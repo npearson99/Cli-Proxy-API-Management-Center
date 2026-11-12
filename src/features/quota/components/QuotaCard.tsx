@@ -5,6 +5,10 @@
  * - loading：双幽灵行骨架（aria-busy，文字等价视觉隐藏）；
  * - error：失败色条 + footer 刷新即重试；
  * - success：provider Body（穿 QuotaBody.module.scss 全页外衣）。
+ *
+ * A disabled credential's card is dimmed and badged Disabled. It refreshes like any
+ * other (a read), but never offers a reset: CPA routes nothing to it, so a reset spent
+ * there buys nothing.
  */
 
 import { useState, type CSSProperties } from 'react';
@@ -20,7 +24,7 @@ import {
 } from '@/features/authFiles/constants';
 import { bindQuotaClasses } from '../types';
 import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
-import { isQuotaRefreshDisabled, type QuotaFileEntry } from '../logic';
+import { isQuotaRefreshDisabled, offersQuotaReset, type QuotaFileEntry } from '../logic';
 import { resetButtonLabel } from '../resetCopy';
 import bodyStyles from './QuotaBody.module.scss';
 import styles from './QuotaCard.module.scss';
@@ -32,6 +36,8 @@ export type QuotaCardProps = {
   entry: QuotaFileEntry;
   quota?: QuotaCardState;
   resolvedTheme: ResolvedTheme;
+  /** The credential is disabled in CPA. */
+  disabled: boolean;
   canRefresh: boolean;
   resetting: boolean;
   /** 首屏级联入场延迟；null = 不入场（切 tab / 翻页 / 刷新新挂载的卡片）。 */
@@ -45,6 +51,7 @@ export function QuotaCard(props: QuotaCardProps) {
     entry,
     quota,
     resolvedTheme,
+    disabled,
     canRefresh,
     resetting,
     entranceDelayMs,
@@ -71,16 +78,19 @@ export function QuotaCard(props: QuotaCardProps) {
     quota?.errorStatus,
     quota?.error || t('common.unknown_error')
   );
-  const showReset =
-    status === 'success' &&
-    Boolean(adapter.resetQuota) &&
-    quota !== undefined &&
-    Boolean(adapter.canResetQuota?.(quota));
+  const showReset = offersQuotaReset(adapter, quota, disabled);
 
   return (
     <article
-      className={`${styles.card} ${mountEntranceDelayMs === null ? '' : styles.cardEnter}`}
+      className={[
+        styles.card,
+        disabled ? styles.cardDisabled : '',
+        mountEntranceDelayMs === null ? '' : styles.cardEnter,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       style={entranceStyle}
+      data-disabled={disabled || undefined}
     >
       <header className={styles.head}>
         <span
@@ -101,6 +111,11 @@ export function QuotaCard(props: QuotaCardProps) {
         <span className={styles.fileName} title={file.name}>
           {file.name}
         </span>
+        {disabled && (
+          <span className={styles.disabledBadge} title={t('quota_management.card_disabled_hint')}>
+            {t('quota_management.card_disabled')}
+          </span>
+        )}
       </header>
 
       <div className={styles.body}>
@@ -137,6 +152,11 @@ export function QuotaCard(props: QuotaCardProps) {
 
       {status !== 'idle' && (
         <footer className={styles.actionRow}>
+          {disabled && (
+            <span className={styles.disabledNote}>
+              {t('quota_management.card_disabled_no_reset')}
+            </span>
+          )}
           {showReset && (
             <button
               type="button"
